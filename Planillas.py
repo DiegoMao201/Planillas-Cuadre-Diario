@@ -30,7 +30,14 @@ def connect_to_gsheet():
         st.warning("Asegúrate de haber configurado los secretos y compartido la hoja con el 'client_email'.")
         return None, None
 
-# --- INICIALIZACIÓN Y MANEJO DE ESTADO ---
+# --- HELPERS Y MANEJO DE ESTADO ---
+
+def format_number(num):
+    """Formatea un número a un string con separador de miles de punto."""
+    try:
+        return f"${int(num):,}".replace(",", ".")
+    except (ValueError, TypeError):
+        return "$0"
 
 def initialize_session_state():
     defaults = {
@@ -73,14 +80,12 @@ if registros_ws and config_ws:
     initialize_session_state()
 
     st.header("1. Selección de Registro")
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
     tienda_seleccionada = col1.selectbox("Tienda", options=tiendas, key="tienda_seleccionada")
     fecha_seleccionada = col2.date_input("Fecha", key="fecha_seleccionada")
-
-    if st.button("Cargar Cuadre"):
-        st.info("Funcionalidad de Cargar en desarrollo.")
-
-    if st.button("Iniciar Cuadre Nuevo"):
+    col3.button("Cargar Cuadre", on_click=lambda: st.info("Funcionalidad de Cargar en desarrollo."), use_container_width=True)
+    
+    if col4.button("Iniciar Cuadre Nuevo", use_container_width=True):
         clear_session_state()
         st.success("Formulario limpiado. Listo para un nuevo cuadre.")
         st.rerun()
@@ -94,72 +99,74 @@ if registros_ws and config_ws:
         st.session_state.factura_inicial = c1.text_input("Factura Inicial", value=st.session_state.factura_inicial)
         st.session_state.factura_final = c2.text_input("Factura Final", value=st.session_state.factura_final)
         st.session_state.venta_total_dia = c3.number_input(
-            "💰 Venta Total del Día", min_value=0.0, step=1000.0, value=st.session_state.venta_total_dia
+            "💰 Venta Total del Día", min_value=0.0, step=1000.0, value=st.session_state.venta_total_dia, format="%d"
         )
 
     with st.container(border=True):
         st.subheader("Desglose de Pagos")
 
+        # --- SECCIONES REFACTORIZADAS CON TABLAS Y FORMATO ---
+        
         with st.expander("💳 Tarjetas (Crédito / Débito)", expanded=True):
-            input_col, btn_col = st.columns([3, 1])
-            input_col.number_input("Valor Nueva Tarjeta", min_value=0.0, step=1000.0, key="new_card_val", label_visibility="collapsed")
+            input_col, btn_col = st.columns([2, 1])
+            input_col.number_input("Valor Nueva Tarjeta", min_value=0.0, step=1000.0, key="new_card_val", label_visibility="collapsed", format="%d")
             if btn_col.button("Agregar Tarjeta"):
                 if st.session_state.new_card_val > 0:
                     st.session_state.tarjetas.append(st.session_state.new_card_val)
                     st.session_state.new_card_val = 0.0
                     st.rerun()
             
-            st.write("---")
             if st.session_state.tarjetas:
                 df_tarjetas = pd.DataFrame({'Valor': st.session_state.tarjetas})
-                df_tarjetas['Eliminar'] = [False] * len(df_tarjetas)
-                
-                edited_df = st.data_editor(df_tarjetas, key='editor_tarjetas', hide_index=True)
-                
+                df_tarjetas['Eliminar'] = False
+                edited_df = st.data_editor(
+                    df_tarjetas, key='editor_tarjetas', hide_index=True, use_container_width=True,
+                    column_config={
+                        "Valor": st.column_config.NumberColumn("Valor", format="$ %d"),
+                        "Eliminar": st.column_config.CheckboxColumn("Eliminar")
+                    }
+                )
                 st.session_state.tarjetas = [float(v) for v in edited_df['Valor']]
-                
                 if edited_df['Eliminar'].any():
                     indices_a_eliminar = edited_df[edited_df['Eliminar']].index
                     st.session_state.tarjetas = [t for i, t in enumerate(st.session_state.tarjetas) if i not in indices_a_eliminar]
                     st.rerun()
-            else:
-                st.info("Aún no se han agregado tarjetas.")
 
             subtotal_tarjetas = sum(st.session_state.tarjetas)
-            st.metric("Subtotal Tarjetas", f"${subtotal_tarjetas:,.0f}")
+            st.metric("Subtotal Tarjetas", format_number(subtotal_tarjetas))
 
         with st.expander("🏦 Consignaciones"):
-            cc1, cc2, cc3, cc4 = st.columns([2, 2, 2, 1])
-            banco_consignacion = cc1.selectbox("Banco", options=bancos, key="banco_consignacion_new")
-            valor_consignacion = cc2.number_input("Valor", min_value=0.0, step=1000.0, key="valor_consignacion_new")
-            fecha_consignacion = cc3.date_input("Fecha Consignación", key="fecha_consignacion_new")
-            if cc4.button("Agregar", key="btn_add_consignacion"):
+            form_cols = st.columns([2, 2, 2, 1])
+            banco_consignacion = form_cols[0].selectbox("Banco", options=bancos, key="banco_consignacion_new")
+            valor_consignacion = form_cols[1].number_input("Valor", min_value=0.0, step=1000.0, key="valor_consignacion_new", format="%d")
+            fecha_consignacion = form_cols[2].date_input("Fecha", key="fecha_consignacion_new")
+            if form_cols[3].button("Agregar", key="btn_add_consignacion"):
                 if valor_consignacion > 0:
-                    st.session_state.consignaciones.append({
-                        "Banco": banco_consignacion, "Valor": valor_consignacion, "Fecha": fecha_consignacion.strftime("%Y-%m-%d")
-                    })
+                    st.session_state.consignaciones.append({"Banco": banco_consignacion, "Valor": valor_consignacion, "Fecha": fecha_consignacion.strftime("%Y-%m-%d")})
                     st.rerun()
             
             if st.session_state.consignaciones:
-                df_consignaciones = pd.DataFrame(st.session_state.consignaciones)
-                df_consignaciones['Eliminar'] = False
-                edited_df_cons = st.data_editor(df_consignaciones, key='editor_consignaciones', hide_index=True)
-                
+                df_cons = pd.DataFrame(st.session_state.consignaciones)
+                df_cons['Eliminar'] = False
+                edited_df_cons = st.data_editor(
+                    df_cons, key='editor_consignaciones', hide_index=True, use_container_width=True,
+                    column_config={"Valor": st.column_config.NumberColumn("Valor", format="$ %d")}
+                )
                 if edited_df_cons['Eliminar'].any():
-                    indices_a_eliminar = edited_df_cons[edited_df_cons['Eliminar']].index
-                    st.session_state.consignaciones = [c for i, c in enumerate(st.session_state.consignaciones) if i not in indices_a_eliminar]
+                    indices = edited_df_cons[edited_df_cons['Eliminar']].index
+                    st.session_state.consignaciones = [c for i, c in enumerate(st.session_state.consignaciones) if i not in indices]
                     st.rerun()
                 else:
                     st.session_state.consignaciones = edited_df_cons.drop(columns=['Eliminar']).to_dict('records')
 
-            subtotal_consignaciones = sum(c['Valor'] for c in st.session_state.consignaciones)
-            st.metric("Subtotal Consignaciones", f"${subtotal_consignaciones:,.0f}")
+            subtotal_consignaciones = sum(c.get('Valor', 0) for c in st.session_state.consignaciones)
+            st.metric("Subtotal Consignaciones", format_number(subtotal_consignaciones))
             
         with st.expander("💸 Gastos"):
-            gc1, gc2, gc3 = st.columns([3, 2, 1])
-            desc_gasto = gc1.text_input("Descripción", key="desc_gasto_new")
-            valor_gasto = gc2.number_input("Valor", min_value=0.0, step=100.0, key="valor_gasto_new")
-            if gc3.button("Agregar", key="btn_add_gasto"):
+            form_cols_gastos = st.columns([3, 2, 1])
+            desc_gasto = form_cols_gastos[0].text_input("Descripción", key="desc_gasto_new")
+            valor_gasto = form_cols_gastos[1].number_input("Valor", min_value=0.0, step=100.0, key="valor_gasto_new", format="%d")
+            if form_cols_gastos[2].button("Agregar", key="btn_add_gasto"):
                 if valor_gasto > 0 and desc_gasto:
                     st.session_state.gastos.append({"Descripción": desc_gasto, "Valor": valor_gasto})
                     st.rerun()
@@ -167,23 +174,25 @@ if registros_ws and config_ws:
             if st.session_state.gastos:
                 df_gastos = pd.DataFrame(st.session_state.gastos)
                 df_gastos['Eliminar'] = False
-                edited_df_gastos = st.data_editor(df_gastos, key='editor_gastos', hide_index=True)
-
+                edited_df_gastos = st.data_editor(
+                    df_gastos, key='editor_gastos', hide_index=True, use_container_width=True,
+                    column_config={"Valor": st.column_config.NumberColumn("Valor", format="$ %d")}
+                )
                 if edited_df_gastos['Eliminar'].any():
-                    indices_a_eliminar = edited_df_gastos[edited_df_gastos['Eliminar']].index
-                    st.session_state.gastos = [g for i, g in enumerate(st.session_state.gastos) if i not in indices_a_eliminar]
+                    indices = edited_df_gastos[edited_df_gastos['Eliminar']].index
+                    st.session_state.gastos = [g for i, g in enumerate(st.session_state.gastos) if i not in indices]
                     st.rerun()
                 else:
                     st.session_state.gastos = edited_df_gastos.drop(columns=['Eliminar']).to_dict('records')
 
-            subtotal_gastos = sum(g['Valor'] for g in st.session_state.gastos)
-            st.metric("Subtotal Gastos", f"${subtotal_gastos:,.0f}")
+            subtotal_gastos = sum(g.get('Valor', 0) for g in st.session_state.gastos)
+            st.metric("Subtotal Gastos", format_number(subtotal_gastos))
 
         with st.expander("💵 Efectivo y Caja Menor"):
-            ec1, ec2, ec3 = st.columns([3, 2, 1])
-            tipo_movimiento = ec1.selectbox("Tipo Movimiento", ["Efectivo", "Reintegro Caja Menor"], key="tipo_mov_new")
-            valor_movimiento = ec2.number_input("Valor", min_value=0.0, step=1000.0, key="valor_mov_new")
-            if ec3.button("Agregar", key="btn_add_efectivo"):
+            form_cols_efectivo = st.columns([3, 2, 1])
+            tipo_movimiento = form_cols_efectivo[0].selectbox("Tipo Movimiento", ["Efectivo", "Reintegro Caja Menor"], key="tipo_mov_new")
+            valor_movimiento = form_cols_efectivo[1].number_input("Valor", min_value=0.0, step=1000.0, key="valor_mov_new", format="%d")
+            if form_cols_efectivo[2].button("Agregar", key="btn_add_efectivo"):
                 if valor_movimiento > 0:
                     st.session_state.efectivo.append({"Tipo": tipo_movimiento, "Valor": valor_movimiento})
                     st.rerun()
@@ -191,17 +200,19 @@ if registros_ws and config_ws:
             if st.session_state.efectivo:
                 df_efectivo = pd.DataFrame(st.session_state.efectivo)
                 df_efectivo['Eliminar'] = False
-                edited_df_efectivo = st.data_editor(df_efectivo, key='editor_efectivo', hide_index=True)
-
+                edited_df_efectivo = st.data_editor(
+                    df_efectivo, key='editor_efectivo', hide_index=True, use_container_width=True,
+                    column_config={"Valor": st.column_config.NumberColumn("Valor", format="$ %d")}
+                )
                 if edited_df_efectivo['Eliminar'].any():
-                    indices_a_eliminar = edited_df_efectivo[edited_df_efectivo['Eliminar']].index
-                    st.session_state.efectivo = [e for i, e in enumerate(st.session_state.efectivo) if i not in indices_a_eliminar]
+                    indices = edited_df_efectivo[edited_df_efectivo['Eliminar']].index
+                    st.session_state.efectivo = [e for i, e in enumerate(st.session_state.efectivo) if i not in indices]
                     st.rerun()
                 else:
                     st.session_state.efectivo = edited_df_efectivo.drop(columns=['Eliminar']).to_dict('records')
 
-            subtotal_efectivo = sum(e['Valor'] for e in st.session_state.efectivo)
-            st.metric("Subtotal Efectivo y Caja Menor", f"${subtotal_efectivo:,.0f}")
+            subtotal_efectivo = sum(e.get('Valor', 0) for e in st.session_state.efectivo)
+            st.metric("Subtotal Efectivo y Caja Menor", format_number(subtotal_efectivo))
 
     st.divider()
 
@@ -211,19 +222,18 @@ if registros_ws and config_ws:
         diferencia = st.session_state.venta_total_dia - total_desglose
 
         v1, v2, v3 = st.columns(3)
-        v1.metric("Venta Total Ingresada", f"${st.session_state.venta_total_dia:,.0f}")
-        v2.metric("Suma del Desglose", f"${total_desglose:,.0f}")
+        v1.metric("Venta Total Ingresada", format_number(st.session_state.venta_total_dia))
+        v2.metric("Suma del Desglose", format_number(total_desglose))
         
-        color_diferencia = "normal" if diferencia == 0 else "inverse"
         label_diferencia = "✅ Diferencia" if diferencia == 0 else "❌ Diferencia"
-        v3.metric(label_diferencia, f"${diferencia:,.0f}", delta_color=color_diferencia)
+        v3.metric(label_diferencia, format_number(diferencia))
 
         if st.button("💾 Guardar Cuadre", type="primary", use_container_width=True):
             if st.session_state.venta_total_dia == 0:
                 st.warning("No se puede guardar un cuadre con venta total en cero.")
             else:
                 if diferencia != 0:
-                    st.warning(f"Atención: El cuadre se guardará con una diferencia de ${diferencia:,.0f}.")
+                    st.toast(f"Atención: El cuadre se guardará con una diferencia de {format_number(diferencia)}.", icon='⚠️')
                 
                 id_registro = f"{tienda_seleccionada}-{fecha_seleccionada.strftime('%Y-%m-%d')}"
                 nueva_fila = [
