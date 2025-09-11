@@ -31,20 +31,17 @@ def connect_to_gsheet():
 
 def get_account_mappings(config_ws):
     """
-    Lee el mapeo de cuentas desde la hoja de configuración esperando 4 columnas:
-    'Tiendas', 'Tipo Movimiento', 'Bancos/Detalle', 'Cuenta Contable'.
+    Lee el mapeo de cuentas desde la hoja 'Configuracion'.
+    Espera las columnas: 'Tiendas', 'Tipo Movimiento', 'Bancos/Detalle', 'Cuenta Contable'.
     """
     try:
-        # get_all_records asume que la primera fila son los encabezados
         records = config_ws.get_all_records()
         mappings = {}
         for record in records:
-            # CORREGIDO: Se leen los datos usando los encabezados de la nueva estructura
             tipo = record.get("Tipo Movimiento")
             detalle = record.get("Bancos/Detalle")
             cuenta = record.get("Cuenta Contable")
             
-            # Solo procesa filas que tengan una cuenta asignada
             if cuenta:
                 if tipo == "BANCO" and detalle:
                     mappings[detalle] = cuenta
@@ -52,7 +49,7 @@ def get_account_mappings(config_ws):
                     mappings[tipo] = cuenta
         return mappings
     except Exception as e:
-        st.error(f"No se pudo leer el mapeo de cuentas. Asegúrate que la hoja 'Configuracion' tenga las columnas: 'Tiendas', 'Tipo Movimiento', 'Bancos/Detalle', 'Cuenta Contable'. Error: {e}")
+        st.error(f"No se pudo leer el mapeo de cuentas. Revisa la estructura de la hoja 'Configuracion'. Error: {e}")
         return {}
 
 def generate_txt_file(registros_ws, config_ws, start_date, end_date):
@@ -63,37 +60,35 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
     account_mappings = get_account_mappings(config_ws)
     
     if not account_mappings:
-        st.error("No se pudo generar el reporte porque no se cargaron las cuentas contables desde 'Configuracion'.")
+        st.error("No se pudo generar el reporte: Faltan las cuentas contables en 'Configuracion'.")
         return None
 
-    filtered_records = []
-    for record in all_records:
-        try:
-            record_date = datetime.strptime(record['Fecha'], '%Y-%m-%d').date()
-            if start_date <= record_date <= end_date:
-                filtered_records.append(record)
-        except (ValueError, TypeError):
-            continue
+    filtered_records = [
+        r for r in all_records 
+        if start_date <= datetime.strptime(r.get('Fecha', '1900-01-01'), '%Y-%m-%d').date() <= end_date
+    ]
 
     if not filtered_records:
         st.warning("No se encontraron registros en el rango de fechas seleccionado.")
         return None
 
-    filtered_records.sort(key=lambda r: (r['Tienda'], r['Fecha']))
+    filtered_records.sort(key=lambda r: (r.get('Tienda', ''), r.get('Fecha', '')))
 
-    txt_lines = []
-    consecutivos_tienda = {}
-    consecutivo_sistema = 2000
+    txt_lines, consecutivos_tienda, consecutivo_sistema = [], {}, 2000
 
     for record in filtered_records:
-        tienda = record['Tienda']
-        centro_costo = re.search(r'\d+', tienda)
-        centro_costo = centro_costo.group(0) if centro_costo else '0'
+        # --- INICIO DE LA CORRECCIÓN ---
+        # Se convierte la variable 'tienda' a string para evitar el TypeError.
+        # .get('Tienda', '') previene errores si la columna no existe. str() maneja valores vacíos (None) o numéricos.
+        tienda = str(record.get('Tienda', ''))
+        if not tienda:
+            continue # Si la tienda está vacía, se salta esta fila para evitar errores.
+        # --- FIN DE LA CORRECCIÓN ---
 
-        if tienda not in consecutivos_tienda:
-            consecutivos_tienda[tienda] = 1001
-        else:
-            consecutivos_tienda[tienda] += 1
+        centro_costo_match = re.search(r'\d+', tienda)
+        centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
+
+        consecutivos_tienda[tienda] = consecutivos_tienda.get(tienda, 1000) + 1
         
         fecha_cuadre = record['Fecha']
         total_debito_dia = 0
@@ -108,58 +103,50 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         # 1. LÍNEAS DE DÉBITO
         for tipo_mov, data_list in movimientos.items():
             for item in data_list:
-                valor = float(item.get('Valor', 0))
+                valor = float(item.get('Valor', 0)); 
                 if valor == 0: continue
                 total_debito_dia += valor
-
                 cuenta, serie_tarjeta = "", tienda
                 nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC"
 
                 if tipo_mov == 'TARJETA':
-                    cuenta = account_mappings.get('TARJETA', 'CUENTA_NO_ENCONTRADA')
-                    serie_tarjeta = f"T{centro_costo}"
+                    cuenta, serie_tarjeta = account_mappings.get('TARJETA', 'ERR'), f"T{centro_costo}"
                 elif tipo_mov == 'CONSIGNACION':
-                    banco = item.get('Banco')
-                    cuenta = account_mappings.get(banco, 'CUENTA_NO_ENCONTRADA')
+                    cuenta = account_mappings.get(item.get('Banco'), 'ERR')
                 elif tipo_mov == 'GASTO':
-                    cuenta = account_mappings.get('GASTO', 'CUENTA_NO_ENCONTRADA')
+                    cuenta = account_mappings.get('GASTO', 'ERR')
                 elif tipo_mov == 'EFECTIVO':
-                    cuenta = account_mappings.get('EFECTIVO', 'CUENTA_NO_ENCONTRADA')
+                    cuenta = account_mappings.get('EFECTIVO', 'ERR')
 
-                linea = [
+                linea = "|".join([
                     fecha_cuadre, str(consecutivos_tienda[tienda]), str(cuenta), "999",
                     f"Ventas planillas contado ({tienda})", serie_tarjeta, str(consecutivo_sistema),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero, "0"
-                ]
-                txt_lines.append("|".join(linea))
+                ]); txt_lines.append(linea)
                 consecutivo_sistema += 1
         
         # 2. LÍNEA DE CRÉDITO (TOTAL DE LA VENTA)
         if total_debito_dia > 0:
-            cuenta_venta = account_mappings.get('VENTA', 'CUENTA_VENTA_NO_ENCONTRADA')
-            linea_credito = [
+            cuenta_venta = account_mappings.get('VENTA', 'ERR_VTA')
+            linea_credito = "|".join([
                 fecha_cuadre, str(consecutivos_tienda[tienda]), str(cuenta_venta), "999",
                 f"Ventas planillas contado ({tienda})", tienda, str(consecutivo_sistema),
                 "0", str(total_debito_dia), centro_costo, "800224617", "FERREINOX SAS BIC", "0"
-            ]
-            txt_lines.append("|".join(linea_credito))
+            ]); txt_lines.append(linea_credito)
             consecutivo_sistema += 1
 
     return "\n".join(txt_lines)
 
 def render_reports_page(registros_ws, config_ws):
-    """Muestra la página de generación de reportes."""
     st.header("Generación de Archivo Plano para ERP", divider="rainbow")
     st.markdown("Seleccione un rango de fechas para generar el archivo TXT para el sistema contable.")
     
     today = datetime.now().date()
     col1, col2 = st.columns(2)
-    start_date = col1.date_input("Fecha de Inicio", today.replace(day=1))
-    end_date = col2.date_input("Fecha de Fin", today)
+    start_date, end_date = col1.date_input("Fecha de Inicio", today.replace(day=1)), col2.date_input("Fecha de Fin", today)
 
     if start_date > end_date:
-        st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin.")
-        return
+        st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin."); return
 
     if st.button("📊 Generar Archivo TXT", use_container_width=True, type="primary"):
         txt_content = generate_txt_file(registros_ws, config_ws, start_date, end_date)
@@ -168,24 +155,20 @@ def render_reports_page(registros_ws, config_ws):
                 label="📥 Descargar Archivo .txt", data=txt_content.encode('utf-8'),
                 file_name=f"contabilidad_{start_date}_a_{end_date}.txt", mime="text/plain",
                 use_container_width=True
-            )
-            st.success("Archivo generado y listo para descargar.")
+            ); st.success("Archivo generado y listo para descargar.")
 
 # --- LÓGICA DE LA PÁGINA DEL FORMULARIO DE CUADRE ---
-# (Las funciones internas no cambian, solo la llamada principal que las organiza)
-
 def initialize_session_state():
-    """Inicializa el estado de la sesión con valores por defecto."""
     defaults = {'page': 'Formulario', 'venta_total_dia': 0.0, 'factura_inicial': "", 'factura_final': "",
                 'tarjetas': [], 'consignaciones': [], 'gastos': [], 'efectivo': [], 'form_cleared': False}
-    for key, value in defaults.items():
-        if key not in st.session_state: st.session_state[key] = value
+    for k, v in defaults.items():
+        if k not in st.session_state: st.session_state[k] = v
 
 def clear_form_state():
     tienda = st.session_state.get('tienda_seleccionada', None)
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
     for key in list(st.session_state.keys()):
-        if key not in ['page']: del st.session_state[key]
+        if key != 'page': del st.session_state[key]
     initialize_session_state()
     if tienda: st.session_state.tienda_seleccionada = tienda
     if fecha: st.session_state.fecha_seleccionada = fecha
@@ -198,92 +181,89 @@ def load_cuadre_data(registros_ws):
     try:
         cell = registros_ws.find(id_registro, in_column=1)
         if cell:
-            row_data = registros_ws.row_values(cell.row)
+            row = registros_ws.row_values(cell.row)
             clear_form_state()
-            st.session_state.factura_inicial = row_data[3] if len(row_data) > 3 else ""
-            st.session_state.factura_final = row_data[4] if len(row_data) > 4 else ""
-            st.session_state.venta_total_dia = float(row_data[5]) if len(row_data) > 5 and row_data[5] else 0.0
-            st.session_state.tarjetas = json.loads(row_data[6]) if len(row_data) > 6 and row_data[6] else []
-            st.session_state.consignaciones = json.loads(row_data[7]) if len(row_data) > 7 and row_data[7] else []
-            st.session_state.gastos = json.loads(row_data[8]) if len(row_data) > 8 and row_data[8] else []
-            st.session_state.efectivo = json.loads(row_data[9]) if len(row_data) > 9 and row_data[9] else []
-            st.toast("✅ Cuadre cargado exitosamente.", icon="📄")
+            st.session_state.factura_inicial = row[3] if len(row) > 3 else ""
+            st.session_state.factura_final = row[4] if len(row) > 4 else ""
+            st.session_state.venta_total_dia = float(row[5]) if len(row) > 5 and row[5] else 0.0
+            st.session_state.tarjetas = json.loads(row[6]) if len(row) > 6 and row[6] else []
+            st.session_state.consignaciones = json.loads(row[7]) if len(row) > 7 and row[7] else []
+            st.session_state.gastos = json.loads(row[8]) if len(row) > 8 and row[8] else []
+            st.session_state.efectivo = json.loads(row[9]) if len(row) > 9 and row[9] else []
+            st.toast("✅ Cuadre cargado.", icon="📄")
         else:
-            st.warning("No se encontró un cuadre para esta selección. Puede crear uno nuevo.")
-            clear_form_state()
+            st.warning("No se encontró cuadre para esta selección."); clear_form_state()
     except Exception as e:
-        st.error(f"Ocurrió un error al cargar los datos: {e}")
-        clear_form_state()
+        st.error(f"Error al cargar datos: {e}"); clear_form_state()
 
 def display_main_header(tiendas_list, registros_ws):
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
-    c1,c2,c3,c4 = st.columns([2,2,1,1]);c1.selectbox("Tienda", options=tiendas_list, key="tienda_seleccionada");c2.date_input("Fecha", key="fecha_seleccionada");c3.button("🔍 Cargar Cuadre", on_click=load_cuadre_data, args=[registros_ws], use_container_width=True);c4.button("✨ Iniciar Nuevo", on_click=clear_form_state, use_container_width=True)
+    c1,c2,c3,c4 = st.columns([2,2,1,1]); c1.selectbox("Tienda", options=tiendas_list, key="tienda_seleccionada"); c2.date_input("Fecha", key="fecha_seleccionada"); c3.button("🔍 Cargar Cuadre", on_click=load_cuadre_data, args=[registros_ws], use_container_width=True); c4.button("✨ Iniciar Nuevo", on_click=clear_form_state, use_container_width=True)
 
 def display_general_info_section():
     with st.container(border=True):
-        st.subheader("📋 Información General");c1,c2,c3=st.columns(3);st.session_state.factura_inicial=c1.text_input("Factura Inicial",value=st.session_state.factura_inicial);st.session_state.factura_final=c2.text_input("Factura Final",value=st.session_state.factura_final);st.session_state.venta_total_dia=c3.number_input("💰 Venta Total (Sistema)",min_value=0.0,step=1000.0,value=float(st.session_state.venta_total_dia),format="%.0f")
+        st.subheader("📋 Información General"); c1,c2,c3=st.columns(3); st.session_state.factura_inicial=c1.text_input("Factura Inicial",value=st.session_state.factura_inicial); st.session_state.factura_final=c2.text_input("Factura Final",value=st.session_state.factura_final); st.session_state.venta_total_dia=c3.number_input("💰 Venta Total (Sistema)",min_value=0.0,step=1000.0,value=float(st.session_state.venta_total_dia),format="%.0f")
 
 def display_payments_breakdown(bancos_list):
     with st.container(border=True):
-        st.subheader("🧾 Desglose de Pagos");display_tarjetas_section();display_consignaciones_section(bancos_list);display_gastos_section();display_efectivo_section()
+        st.subheader("🧾 Desglose de Pagos"); display_tarjetas_section(); display_consignaciones_section(bancos_list); display_gastos_section(); display_efectivo_section()
 
 def display_tarjetas_section():
     with st.expander("💳 **Tarjetas**", expanded=True):
         with st.form("form_tarjetas",clear_on_submit=True):
             valor=st.number_input("Valor",min_value=1.0,step=1000.0,format="%.0f",label_visibility="collapsed")
             if st.form_submit_button("Agregar Tarjeta",use_container_width=True):
-                if valor>0:st.session_state.tarjetas.append(valor);st.toast(f"Agregado: {format_currency(valor)}");st.rerun()
+                if valor>0: st.session_state.tarjetas.append(valor); st.toast(f"Agregado: {format_currency(valor)}"); st.rerun()
         if st.session_state.tarjetas:
-            df=pd.DataFrame({'Valor':st.session_state.tarjetas});df['Eliminar']=False;edited_df=st.data_editor(df,key='editor_tarjetas',hide_index=True,use_container_width=True,column_config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f"),"Eliminar":st.column_config.CheckboxColumn("Eliminar",width="small")})
-            if edited_df['Eliminar'].any():st.session_state.tarjetas=[t for i,t in enumerate(st.session_state.tarjetas) if i not in edited_df[edited_df['Eliminar']].index];st.toast("Tarjeta(s) eliminada(s).");st.rerun()
-            else:st.session_state.tarjetas=[float(v) for v in pd.to_numeric(edited_df['Valor'],errors='coerce').dropna().tolist()]
+            df=pd.DataFrame({'Valor':st.session_state.tarjetas}); df['Eliminar']=False; edited_df=st.data_editor(df,key='editor_tarjetas',hide_index=True,use_container_width=True,column_config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f"),"Eliminar":st.column_config.CheckboxColumn("Eliminar",width="small")})
+            if edited_df['Eliminar'].any(): st.session_state.tarjetas=[t for i,t in enumerate(st.session_state.tarjetas) if i not in edited_df[edited_df['Eliminar']].index]; st.toast("Tarjeta(s) eliminada(s)."); st.rerun()
+            else: st.session_state.tarjetas=[float(v) for v in pd.to_numeric(edited_df['Valor'],errors='coerce').dropna().tolist()]
         st.metric("Subtotal Tarjetas",format_currency(sum(st.session_state.tarjetas)))
 
-def display_dynamic_list_section(title, state_key, form_inputs, df_columns, bancos_list=None):
+def display_dynamic_list_section(title, key, form_inputs, df_cols, bancos=None):
     with st.expander(f"**{title}**"):
-        with st.form(f"form_{state_key}",clear_on_submit=True):
-            cols=st.columns(len(form_inputs));data={}
+        with st.form(f"form_{key}",clear_on_submit=True):
+            cols=st.columns(len(form_inputs)); data={}
             for i,(k,t,o) in enumerate(form_inputs):
-                if t=="selectbox":data[k]=cols[i].selectbox(o['label'],options=bancos_list if k=="Banco" else o['options'])
-                elif t=="number_input":data[k]=cols[i].number_input(o['label'],min_value=0.0,step=1000.0,format="%.0f")
-                elif t=="date_input":data[k]=cols[i].date_input(o['label'],value=datetime.now().date())
-                else:data[k]=cols[i].text_input(o['label'])
+                if t=="selectbox": data[k]=cols[i].selectbox(o['label'],options=bancos if k=="Banco" else o['options'])
+                elif t=="number_input": data[k]=cols[i].number_input(o['label'],min_value=0.0,step=1000.0,format="%.0f")
+                elif t=="date_input": data[k]=cols[i].date_input(o['label'],value=datetime.now().date())
+                else: data[k]=cols[i].text_input(o['label'])
             if st.form_submit_button("Agregar"):
                 if data.get("Valor",0)>0:
-                    if 'Fecha' in data:data['Fecha']=data['Fecha'].strftime("%Y-%m-%d")
-                    st.session_state[state_key].append(data);st.toast("Registro agregado.");st.rerun()
-        if st.session_state[state_key]:
-            df=pd.DataFrame(st.session_state[state_key]);df['Eliminar']=False;config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f")}
-            for col,c in df_columns.items():config[col]=st.column_config.SelectboxColumn(col,options=c['options'])
-            edited_df=st.data_editor(df,key=f'editor_{state_key}',hide_index=True,use_container_width=True,column_config=config)
-            if edited_df['Eliminar'].any():st.session_state[state_key]=[item for i,item in enumerate(st.session_state[state_key]) if i not in edited_df[edited_df['Eliminar']].index];st.toast("Registro(s) eliminado(s).");st.rerun()
-            else:df_c=edited_df.drop(columns=['Eliminar']);df_c['Valor']=pd.to_numeric(df_c['Valor'],errors='coerce').fillna(0.0);df_c=df_c[df_c['Valor']>0];df_c['Valor']=df_c['Valor'].astype(float);st.session_state[state_key]=df_c.to_dict('records')
-        st.metric(f"Subtotal {title.split('**')[0]}", format_currency(sum(item.get('Valor',0) for item in st.session_state[state_key])))
+                    if 'Fecha' in data: data['Fecha']=data['Fecha'].strftime("%Y-%m-%d")
+                    st.session_state[key].append(data); st.toast("Registro agregado."); st.rerun()
+        if st.session_state[key]:
+            df=pd.DataFrame(st.session_state[key]); df['Eliminar']=False; config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f")}
+            for col,c in df_cols.items(): config[col]=st.column_config.SelectboxColumn(col,options=c['options'])
+            edited_df=st.data_editor(df,key=f'editor_{key}',hide_index=True,use_container_width=True,column_config=config)
+            if edited_df['Eliminar'].any(): st.session_state[key]=[item for i,item in enumerate(st.session_state[key]) if i not in edited_df[edited_df['Eliminar']].index]; st.toast("Registro(s) eliminado(s)."); st.rerun()
+            else: df_c=edited_df.drop(columns=['Eliminar']); df_c['Valor']=pd.to_numeric(df_c['Valor'],errors='coerce').fillna(0.0); df_c=df_c[df_c['Valor']>0]; df_c['Valor']=df_c['Valor'].astype(float); st.session_state[key]=df_c.to_dict('records')
+        st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(sum(item.get('Valor',0) for item in st.session_state[key])))
 
-def display_consignaciones_section(bancos_list):display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco","options":bancos_list}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],{"Banco":{"type":"selectbox","options":bancos_list}},bancos_list)
-def display_gastos_section():display_dynamic_list_section("💸 Gastos","gastos",[("Descripción","text_input",{"label":"Descripción"}),("Valor","number_input",{"label":"Valor"})],{})
-def display_efectivo_section():display_dynamic_list_section("💵 Efectivo y Caja Menor","efectivo",[("Tipo","selectbox",{"label":"Tipo Movimiento","options":["Efectivo Entregado","Reintegro Caja Menor"]}),("Valor","number_input",{"label":"Valor"})],{"Tipo":{"type":"selectbox","options":["Efectivo Entregado","Reintegro Caja Menor"]}})
+def display_consignaciones_section(bancos_list): display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco","options":bancos_list}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],{"Banco":{"type":"selectbox","options":bancos_list}},bancos=bancos_list)
+def display_gastos_section(): display_dynamic_list_section("💸 Gastos","gastos",[("Descripción","text_input",{"label":"Descripción"}),("Valor","number_input",{"label":"Valor"})],{})
+def display_efectivo_section(): display_dynamic_list_section("💵 Efectivo","efectivo",[("Tipo","selectbox",{"label":"Tipo Movimiento","options":["Efectivo Entregado","Reintegro Caja Menor"]}),("Valor","number_input",{"label":"Valor"})],{"Tipo":{"type":"selectbox","options":["Efectivo Entregado","Reintegro Caja Menor"]}})
 
 def display_summary_and_save(registros_ws):
     st.header("3. Verificación y Guardado",anchor=False,divider="rainbow")
     with st.container(border=True):
         sub_t=sum(st.session_state.tarjetas);sub_c=sum(c.get('Valor',0) for c in st.session_state.consignaciones);sub_g=sum(g.get('Valor',0) for g in st.session_state.gastos);sub_e=sum(e.get('Valor',0) for e in st.session_state.efectivo);total_d=sub_t+sub_c+sub_g+sub_e;venta_t=st.session_state.venta_total_dia;diferencia=venta_t-total_d;
         v1,v2,v3=st.columns(3);v1.metric("💰 Venta Total (Sistema)",format_currency(venta_t));v2.metric("📊 Suma del Desglose",format_currency(total_d));
-        if diferencia==0:v3.metric("✅ Diferencia (Cuadre OK)",format_currency(diferencia))
-        else:v3.metric("❌ Diferencia (Revisar)",format_currency(diferencia),delta=format_currency(diferencia),delta_color="inverse")
+        if diferencia==0: v3.metric("✅ Diferencia (Cuadre OK)",format_currency(diferencia))
+        else: v3.metric("❌ Diferencia (Revisar)",format_currency(diferencia),delta=format_currency(diferencia),delta_color="inverse")
         if st.button("💾 Guardar o Actualizar Cuadre",type="primary",use_container_width=True):
-            if venta_t==0:st.warning("No se puede guardar un cuadre con la Venta Total en cero.");return
-            fecha_str=st.session_state.fecha_seleccionada.strftime("%Y-%m-%d");id_r=f"{st.session_state.tienda_seleccionada}-{fecha_str}";
+            if venta_t==0: st.warning("Venta Total no puede ser cero."); return
+            fecha_str=st.session_state.fecha_seleccionada.strftime("%Y-%m-%d"); id_r=f"{st.session_state.tienda_seleccionada}-{fecha_str}";
             fila=[id_r,st.session_state.tienda_seleccionada,fecha_str,st.session_state.factura_inicial,st.session_state.factura_final,venta_t,json.dumps(st.session_state.tarjetas),json.dumps(st.session_state.consignaciones),json.dumps(st.session_state.gastos),json.dumps(st.session_state.efectivo),diferencia,datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
             try:
                 cell=registros_ws.find(id_r,in_column=1)
-                if cell:registros_ws.update(f'A{cell.row}',[fila]);st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **actualizado**!")
-                else:registros_ws.append_row(fila);st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **guardado**!")
-                clear_form_state();st.rerun()
-            except Exception as e:st.error(f"Error al guardar: {e}")
+                if cell: registros_ws.update(f'A{cell.row}',[fila]); st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **actualizado**!")
+                else: registros_ws.append_row(fila); st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **guardado**!")
+                clear_form_state(); st.rerun()
+            except Exception as e: st.error(f"Error al guardar: {e}")
 
 def render_form_page(registros_ws, config_ws, tiendas, bancos):
-    """Muestra la página principal del formulario de cuadre."""
     display_main_header(tiendas, registros_ws)
     st.divider()
     st.header("2. Formulario de Cuadre", anchor=False, divider="rainbow")
@@ -292,43 +272,30 @@ def render_form_page(registros_ws, config_ws, tiendas, bancos):
     display_summary_and_save(registros_ws)
 
 # --- FLUJO PRINCIPAL DE LA APLICACIÓN ---
-
 def main():
-    """Función principal que renderiza la aplicación y maneja la navegación."""
     initialize_session_state()
     
     try:
-        logo = Image.open("LOGO FERREINOX SAS BIC 2024.PNG")
-        c1, c2 = st.columns([1, 4])
-        c1.image(logo, width=150)
-        c2.title("CUADRE DIARIO DE CAJA")
-    except FileNotFoundError:
-        st.title("CUADRE DIARIO DE CAJA")
+        c1, c2 = st.columns([1, 4]); c1.image(Image.open("LOGO FERREINOX SAS BIC 2024.PNG"), width=150); c2.title("CUADRE DIARIO DE CAJA")
+    except FileNotFoundError: st.title("CUADRE DIARIO DE CAJA")
 
     registros_ws, config_ws = connect_to_gsheet()
 
     if registros_ws and config_ws:
         with st.sidebar:
             st.header("Navegación")
-            if st.button("📝 Formulario de Cuadre", use_container_width=True, type="primary" if st.session_state.page == "Formulario" else "secondary"):
-                st.session_state.page = "Formulario"
-            if st.button("📈 Reportes TXT", use_container_width=True, type="primary" if st.session_state.page == "Reportes" else "secondary"):
-                st.session_state.page = "Reportes"
+            if st.button("📝 Formulario de Cuadre", use_container_width=True, type="primary" if st.session_state.page=="Formulario" else "secondary"): st.session_state.page="Formulario"; st.rerun()
+            if st.button("📈 Reportes TXT", use_container_width=True, type="primary" if st.session_state.page=="Reportes" else "secondary"): st.session_state.page="Reportes"; st.rerun()
         
         try:
-            # CORREGIDO: Lectura de listas desde la nueva estructura de la hoja.
-            tiendas = [t for t in config_ws.col_values(1)[1:] if t] # Columna A
-            bancos = [b for b in config_ws.col_values(3)[1:] if b]  # Columna C
+            tiendas = [t for t in config_ws.col_values(1)[1:] if t]
+            bancos = [b for b in config_ws.col_values(3)[1:] if b]
         except Exception as e:
-            st.error(f"Error al cargar datos de 'Configuracion': {e}")
-            tiendas, bancos = [], []
+            st.error(f"Error al cargar datos de 'Configuracion': {e}"); tiendas, bancos = [], []
 
-        if st.session_state.page == "Formulario":
-            render_form_page(registros_ws, config_ws, tiendas, bancos)
-        elif st.session_state.page == "Reportes":
-            render_reports_page(registros_ws, config_ws)
-    else:
-        st.info("Esperando conexión con Google Sheets...")
+        if st.session_state.page == "Formulario": render_form_page(registros_ws, config_ws, tiendas, bancos)
+        elif st.session_state.page == "Reportes": render_reports_page(registros_ws, config_ws)
+    else: st.info("Esperando conexión con Google Sheets...")
 
 if __name__ == "__main__":
     main()
