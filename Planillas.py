@@ -328,7 +328,7 @@ def main():
 
     # --- NUEVA SECCIÓN DE TÍTULO Y LOGO ---
     try:
-        logo = Image.open("LOGO FERREINOX SAS BIC 2024.PNG")
+        logo = Image.open("LOGO FERREINOX SAS BIC 2024.png")
         c1, c2 = st.columns([1, 4])
         c1.image(logo, width=150)
         c2.title("CUADRE DIARIO DE CAJA")
