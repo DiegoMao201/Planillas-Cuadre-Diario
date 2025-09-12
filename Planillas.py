@@ -43,10 +43,8 @@ def get_account_mappings(config_ws):
             cuenta = record.get("Cuenta Contable")
             
             if cuenta:
-                # Si es un BANCO y tiene un detalle (nombre del banco), esa es la llave
                 if tipo == "BANCO" and detalle:
                     mappings[detalle] = str(cuenta)
-                # Para otros tipos de movimiento, la llave es el mismo tipo
                 elif tipo and tipo != "BANCO":
                     mappings[tipo] = str(cuenta)
         return mappings
@@ -81,14 +79,9 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
     for record in filtered_records:
         tienda_original = str(record.get('Tienda', ''))
         if not tienda_original:
-            continue # Si la tienda está vacía, se salta esta fila para evitar errores.
+            continue
 
-        # Extrae el nombre de la tienda sin los paréntesis para usarlo en descripciones.
-        # Ejemplo: de "Tienda (158)" se obtiene "Tienda 158"
         tienda_descripcion = re.sub(r'[\(\)]', '', tienda_original).strip()
-        
-        # Extrae solo el número de la tienda para usarlo como centro de costo y en la serie.
-        # Ejemplo: de "Tienda (158)" se obtiene "158"
         centro_costo_match = re.search(r'\d+', tienda_original)
         centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
 
@@ -107,7 +100,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         # 1. LÍNEAS DE DÉBITO
         for tipo_mov, data_list in movimientos.items():
             for item in data_list:
-                # Si el item es solo un número (formato antiguo de tarjetas), conviértelo a dict
                 if isinstance(item, (int, float)):
                     valor = float(item)
                 else:
@@ -117,16 +109,19 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 total_debito_dia += valor
                 
                 cuenta = ""
-                # El campo 'serie' por defecto es el centro de costo (solo el número)
-                serie_documento = centro_costo 
                 nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC"
 
+                # >>>>> INICIO DE LA LÓGICA CLAVE PARA LA SERIE <<<<<
+                # Por defecto, la serie será solo el número del centro de costo (ej: 158)
+                serie_documento = centro_costo
+                
+                # PERO, si el tipo de movimiento es TARJETA, modificamos la serie
                 if tipo_mov == 'TARJETA':
                     cuenta = account_mappings.get('TARJETA', 'ERR_TARJETA')
-                    # >>> INICIO DE LA MODIFICACIÓN #2 <<<
-                    # Si es tarjeta, se le antepone la 'T' al centro de costo
+                    # Aquí es donde se le antepone la 'T' a la serie (ej: T158)
                     serie_documento = f"T{centro_costo}"
-                    # >>> FIN DE LA MODIFICACIÓN #2 <<<
+                # >>>>> FIN DE LA LÓGICA CLAVE PARA LA SERIE <<<<<
+
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
                     cuenta = account_mappings.get(banco, f'ERR_{banco}')
@@ -136,15 +131,12 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     cuenta = account_mappings.get(tipo_especifico, f'ERR_{tipo_especifico}')
 
-                # >>> INICIO DE LA MODIFICACIÓN #1 <<<
-                # Se genera la descripción sin los paréntesis, como solicitaste.
                 descripcion = f"Ventas planillas contado {tienda_descripcion}"
-                # >>> FIN DE LA MODIFICACIÓN #1 <<<
 
                 linea = "|".join([
                     fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta), "999",
-                    descripcion, # Campo modificado
-                    serie_documento, # Campo modificado
+                    descripcion,
+                    serie_documento, # Usamos la variable que ya tiene la 'T' si es tarjeta
                     str(consecutivo_sistema),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero, "0"
                 ])
@@ -154,16 +146,12 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         # 2. LÍNEA DE CRÉDITO (TOTAL DE LA VENTA)
         if total_debito_dia > 0:
             cuenta_venta = "11050501" 
-            
-            # >>> INICIO DE LA MODIFICACIÓN #1 (También en la línea de crédito) <<<
-            # Se genera la descripción sin los paréntesis, como solicitaste.
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
-            # >>> FIN DE LA MODIFICACIÓN #1 <<<
             
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta_venta), "999",
-                descripcion_credito, # Campo modificado
-                centro_costo, # La serie aquí es solo el número de la tienda
+                descripcion_credito,
+                centro_costo, # La serie en la contrapartida no lleva 'T'
                 str(consecutivo_sistema),
                 "0", str(total_debito_dia), centro_costo, "800224617", "FERREINOX SAS BIC", "0"
             ])
@@ -277,7 +265,7 @@ def display_tarjetas_section():
             valor=st.number_input("Valor",min_value=1.0,step=1000.0,format="%.0f",label_visibility="collapsed")
             if st.form_submit_button("Agregar Tarjeta",use_container_width=True):
                 if valor>0: 
-                    st.session_state.tarjetas.append({'Valor': valor}) # Guardar como dict para consistencia
+                    st.session_state.tarjetas.append({'Valor': valor})
                     st.toast(f"Agregado: {format_currency(valor)}")
                     st.rerun()
         if st.session_state.tarjetas:
@@ -333,8 +321,10 @@ def display_dynamic_list_section(title, key, form_inputs, df_cols, bancos=None):
 
 def display_consignaciones_section(bancos_list):
     display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco","options":bancos_list}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],{},bancos=bancos_list)
+
 def display_gastos_section():
     display_dynamic_list_section("💸 Gastos","gastos",[("Descripción","text_input",{"label":"Descripción"}),("Valor","number_input",{"label":"Valor"})],{})
+
 def display_efectivo_section():
     display_dynamic_list_section("💵 Efectivo","efectivo",[("Tipo","selectbox",{"label":"Tipo Movimiento","options":["Efectivo Entregado","Reintegro Caja Menor"]}),("Valor","number_input",{"label":"Valor"})],{})
 
@@ -372,10 +362,7 @@ def display_summary_and_save(registros_ws):
                 else: 
                     registros_ws.append_row(fila)
                     st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **guardado**!")
-                
-                # Opcional: Limpiar después de guardar
-                # clear_form_state()
-                # st.rerun()
+
             except Exception as e: st.error(f"Error al guardar: {e}")
 
 def render_form_page(registros_ws, config_ws, tiendas, bancos):
