@@ -185,20 +185,15 @@ def clear_form_state():
 def format_currency(num):
     return f"${int(num):,}".replace(",", ".") if isinstance(num, (int, float)) else "$0"
 
-# ==============================================================================
-# ======================== INICIO DEL CÓDIGO CORREGIDO =========================
-# ==============================================================================
 def load_cuadre_data(registros_ws):
-    """Carga los datos de un cuadre existente. CORREGIDO para leer las columnas correctas."""
+    """Carga los datos de un cuadre existente."""
     id_registro = f"{st.session_state.tienda_seleccionada}-{st.session_state.fecha_seleccionada.strftime('%Y-%m-%d')}"
     try:
         cell = registros_ws.find(id_registro, in_column=1)
         if cell:
-            row_data = registros_ws.get(f'A{cell.row}:M{cell.row}')[0] # Lee 13 columnas
+            row_data = registros_ws.get(f'A{cell.row}:M{cell.row}')[0]
             clear_form_state() 
             
-            # --- CORRECCIÓN DE ÍNDICES ---
-            # Se ajustaron todos los índices sumando 1 para compensar la nueva columna en B.
             st.session_state.factura_inicial = row_data[4] if len(row_data) > 4 else ""
             st.session_state.factura_final = row_data[5] if len(row_data) > 5 else ""
             st.session_state.venta_total_dia = float(row_data[6]) if len(row_data) > 6 and row_data[6] else 0.0
@@ -213,10 +208,6 @@ def load_cuadre_data(registros_ws):
     except Exception as e:
         st.error(f"Error al cargar datos. Verifica la estructura de la hoja 'Registros'. Error: {e}")
         clear_form_state()
-# ==============================================================================
-# ========================= FIN DEL CÓDIGO CORREGIDO ===========================
-# ==============================================================================
-
 
 # --- FUNCIONES PARA MANEJAR CONSECUTIVOS ---
 def get_next_consecutive(consecutivos_ws, tienda):
@@ -235,22 +226,16 @@ def get_next_consecutive(consecutivos_ws, tienda):
             centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
             return starting_consecutives.get(centro_costo, 1000)
     except Exception as e:
+        # Se muestra el error original para un mejor diagnóstico.
         st.error(f"Error al obtener consecutivo: {e}")
         return None
 
-def update_consecutive(consecutivos_ws, tienda, new_consecutive):
-    """Actualiza o crea el registro del último consecutivo para una tienda."""
-    try:
-        cell = consecutivos_ws.find(tienda, in_column=1)
-        if cell:
-            consecutivos_ws.update_cell(cell.row, 2, new_consecutive)
-        else:
-            consecutivos_ws.append_row([tienda, new_consecutive])
-    except Exception as e:
-        st.error(f"Error al actualizar consecutivo: {e}")
-
 # --- FUNCIÓN DE GUARDADO ---
+# ==============================================================================
+# ======================== INICIO DEL CÓDIGO CORREGIDO =========================
+# ==============================================================================
 def display_summary_and_save(registros_ws, consecutivos_ws):
+    """Muestra el resumen y maneja la lógica de guardado/actualización."""
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
     with st.container(border=True):
         sub_t = sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)
@@ -273,12 +258,19 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
         )
         
         if st.button("💾 Guardar o Actualizar Cuadre", type="primary", use_container_width=True):
+            # --- NUEVA VALIDACIÓN ---
+            # Se comprueba que haya una tienda seleccionada antes de continuar.
+            tienda_seleccionada = st.session_state.get("tienda_seleccionada")
+            if not tienda_seleccionada:
+                st.warning("🛑 Por favor, seleccione una tienda antes de guardar.")
+                return
+
             if venta_t == 0:
                 st.warning("Venta Total no puede ser cero.")
                 return
 
             fecha_str = st.session_state.fecha_seleccionada.strftime("%Y-%m-%d")
-            id_r = f"{st.session_state.tienda_seleccionada}-{fecha_str}"
+            id_r = f"{tienda_seleccionada}-{fecha_str}"
             
             try:
                 cell = registros_ws.find(id_r, in_column=1)
@@ -287,12 +279,12 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
                     consecutivo_asignado = registros_ws.cell(cell.row, 2).value
                     st.info(f"Actualizando registro. El consecutivo se mantendrá: {consecutivo_asignado}")
                 else:
-                    consecutivo_asignado = get_next_consecutive(consecutivos_ws, st.session_state.tienda_seleccionada)
+                    consecutivo_asignado = get_next_consecutive(consecutivos_ws, tienda_seleccionada)
                     if consecutivo_asignado is None: return
-                    update_consecutive(consecutivos_ws, st.session_state.tienda_seleccionada, consecutivo_asignado)
+                    update_consecutive(consecutivos_ws, tienda_seleccionada, consecutivo_asignado)
 
                 fila = [
-                    id_r, consecutivo_asignado, st.session_state.tienda_seleccionada, fecha_str,
+                    id_r, consecutivo_asignado, tienda_seleccionada, fecha_str,
                     st.session_state.factura_inicial, st.session_state.factura_final, venta_t,
                     json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
                     json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
@@ -301,19 +293,22 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
                 
                 if cell:
                     registros_ws.update(f'A{cell.row}', [fila])
-                    st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **actualizado**!")
+                    st.success(f"✅ Cuadre para {tienda_seleccionada} el {fecha_str} fue **actualizado**!")
                 else:
                     registros_ws.append_row(fila)
-                    st.success(f"✅ Cuadre para {st.session_state.tienda_seleccionada} el {fecha_str} fue **guardado** con el consecutivo **{consecutivo_asignado}**!")
+                    st.success(f"✅ Cuadre para {tienda_seleccionada} el {fecha_str} fue **guardado** con el consecutivo **{consecutivo_asignado}**!")
 
             except Exception as e:
                 st.error(f"Error al guardar: {e}")
+
+# ==============================================================================
+# ========================= FIN DEL CÓDIGO CORREGIDO ===========================
+# ==============================================================================
 
 # --- FUNCIONES DE VISUALIZACIÓN ---
 def display_main_header(tiendas_list, registros_ws):
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
     c1,c2,c3,c4 = st.columns([2,2,1,1])
-    # Usar 'on_change' para limpiar el formulario si se cambia la tienda o la fecha
     c1.selectbox("Tienda", options=tiendas_list, key="tienda_seleccionada", on_change=clear_form_state)
     c2.date_input("Fecha", key="fecha_seleccionada", on_change=clear_form_state)
     c3.button("🔍 Cargar Cuadre", on_click=load_cuadre_data, args=[registros_ws], use_container_width=True)
@@ -346,7 +341,6 @@ def display_tarjetas_section():
                     st.toast(f"Agregado: {format_currency(valor)}")
                     st.rerun()
         if st.session_state.tarjetas:
-            # Estandariza los datos para asegurar que sea una lista de diccionarios
             df_data = [item if isinstance(item, dict) else {'Valor': item} for item in st.session_state.tarjetas]
             df = pd.DataFrame(df_data)
             df['Eliminar'] = False
@@ -361,7 +355,6 @@ def display_tarjetas_section():
                 st.toast("Tarjeta(s) eliminada(s).")
                 st.rerun()
             else:
-                # Procesa los datos editados de forma segura
                 cleaned_df = edited_df.drop(columns=['Eliminar'])
                 cleaned_df['Valor'] = pd.to_numeric(cleaned_df['Valor'], errors='coerce').fillna(0)
                 st.session_state.tarjetas = cleaned_df[['Valor']].to_dict('records')
@@ -452,6 +445,13 @@ def main():
         except Exception as e:
             st.error(f"Error al cargar datos de 'Configuracion': {e}")
             tiendas, bancos = [], []
+
+        # --- NUEVA VALIDACIÓN INICIAL ---
+        # Si no hay tiendas configuradas, se detiene la ejecución del formulario.
+        if not tiendas and st.session_state.page == "Formulario":
+            st.error("🚨 No se encontraron tiendas en la hoja de 'Configuracion'.")
+            st.warning("Por favor, agregue al menos una tienda en la columna 'Tiendas' de su hoja de cálculo para poder continuar.")
+            return
 
         if st.session_state.page == "Formulario":
             render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos)
