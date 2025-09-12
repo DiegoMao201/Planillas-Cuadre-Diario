@@ -27,7 +27,7 @@ def connect_to_gsheet():
         st.error(f"Error al conectar con Google Sheets: {e}")
         return None, None
 
-# --- LÓGICA DE LA PÁGINA DE REPORTES ---
+# --- LÓGINA DE LA PÁGINA DE REPORTES ---
 
 def get_account_mappings(config_ws):
     """
@@ -52,6 +52,10 @@ def get_account_mappings(config_ws):
         st.error(f"No se pudo leer el mapeo de cuentas. Revisa la estructura de la hoja 'Configuracion'. Error: {e}")
         return {}
 
+# ==============================================================================
+# ======================= INICIO DEL CÓDIGO MODIFICADO =========================
+# ==============================================================================
+
 def generate_txt_file(registros_ws, config_ws, start_date, end_date):
     """Genera el contenido del archivo TXT a partir de los registros."""
     st.info("Generando archivo... Esto puede tardar unos segundos.")
@@ -72,9 +76,23 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         st.warning("No se encontraron registros en el rango de fechas seleccionado.")
         return None
 
+    # Ordenamos por tienda y luego por fecha para asegurar que los consecutivos se asignen correctamente.
     filtered_records.sort(key=lambda r: (r.get('Tienda', ''), r.get('Fecha', '')))
 
-    txt_lines, consecutivos_tienda, consecutivo_sistema = [], {}, 2000
+    txt_lines = []
+
+    # --- CAMBIO 1: Definir los números de inicio para cada centro de costo ---
+    # Diccionario con los números iniciales para el consecutivo de cada tienda.
+    starting_consecutives = {
+        '156': 11509,
+        '189': 11566,
+        '157': 10990,
+        '158': 11565,
+        '238': 10924,
+        '439': 11563
+    }
+    # Este diccionario guardará el consecutivo ACTUAL para cada tienda mientras se genera el reporte.
+    consecutivos_tienda_actual = {}
 
     for record in filtered_records:
         tienda_original = str(record.get('Tienda', ''))
@@ -85,7 +103,18 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         centro_costo_match = re.search(r'\d+', tienda_original)
         centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
 
-        consecutivos_tienda[tienda_original] = consecutivos_tienda.get(tienda_original, 1000) + 1
+        # --- Lógica mejorada para asignar y aumentar el consecutivo por tienda ---
+        if tienda_original not in consecutivos_tienda_actual:
+            # Si es la primera vez que vemos esta tienda en este reporte,
+            # le asignamos su número inicial definido en 'starting_consecutives'.
+            # Si una tienda no está en la lista, usará 1000 como valor por defecto.
+            consecutivos_tienda_actual[tienda_original] = starting_consecutives.get(centro_costo, 1000)
+        else:
+            # Si ya hemos procesado un registro para esta tienda, incrementamos su consecutivo.
+            consecutivos_tienda_actual[tienda_original] += 1
+        
+        # Guardamos el consecutivo que se usará para todas las líneas de este registro.
+        consecutivo_del_registro = consecutivos_tienda_actual[tienda_original]
         
         fecha_cuadre = record['Fecha']
         total_debito_dia = 0
@@ -111,17 +140,11 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 cuenta = ""
                 nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC"
 
-                # >>>>> INICIO DE LA LÓGICA CLAVE PARA LA SERIE <<<<<
-                # Por defecto, la serie será solo el número del centro de costo (ej: 158)
                 serie_documento = centro_costo
                 
-                # PERO, si el tipo de movimiento es TARJETA, modificamos la serie
                 if tipo_mov == 'TARJETA':
                     cuenta = account_mappings.get('TARJETA', 'ERR_TARJETA')
-                    # Aquí es donde se le antepone la 'T' a la serie (ej: T158)
                     serie_documento = f"T{centro_costo}"
-                # >>>>> FIN DE LA LÓGICA CLAVE PARA LA SERIE <<<<<
-
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
                     cuenta = account_mappings.get(banco, f'ERR_{banco}')
@@ -134,14 +157,16 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 descripcion = f"Ventas planillas contado {tienda_descripcion}"
 
                 linea = "|".join([
-                    fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta), "999",
+                    fecha_cuadre, 
+                    str(consecutivo_del_registro), # Usa el nuevo consecutivo
+                    str(cuenta), 
+                    "8", # --- CAMBIO 2: Se reemplaza 999 por 8 ---
                     descripcion,
-                    serie_documento, # Usamos la variable que ya tiene la 'T' si es tarjeta
-                    str(consecutivo_sistema),
+                    serie_documento,
+                    str(consecutivo_del_registro), # --- CAMBIO 3: El consecutivo de serie es el mismo ---
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea)
-                consecutivo_sistema += 1
         
         # 2. LÍNEA DE CRÉDITO (TOTAL DE LA VENTA)
         if total_debito_dia > 0:
@@ -149,16 +174,22 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
             
             linea_credito = "|".join([
-                fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta_venta), "999",
+                fecha_cuadre, 
+                str(consecutivo_del_registro), # Usa el nuevo consecutivo
+                str(cuenta_venta), 
+                "8", # --- CAMBIO 2: Se reemplaza 999 por 8 ---
                 descripcion_credito,
-                centro_costo, # La serie en la contrapartida no lleva 'T'
-                str(consecutivo_sistema),
+                centro_costo,
+                str(consecutivo_del_registro), # --- CAMBIO 3: El consecutivo de serie es el mismo ---
                 "0", str(total_debito_dia), centro_costo, "800224617", "FERREINOX SAS BIC", "0"
             ])
             txt_lines.append(linea_credito)
-            consecutivo_sistema += 1
 
     return "\n".join(txt_lines)
+
+# ==============================================================================
+# ======================== FIN DEL CÓDIGO MODIFICADO ===========================
+# ==============================================================================
 
 def render_reports_page(registros_ws, config_ws):
     st.header("Generación de Archivo Plano para ERP", divider="rainbow")
