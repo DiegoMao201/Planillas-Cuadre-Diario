@@ -77,9 +77,9 @@ def get_account_mappings(config_ws):
         st.error(f"Error al leer el mapeo de cuentas. Revisa la estructura de la hoja 'Configuracion'. Error: {e}")
         return {}
 
-def generate_txt_file(registros_ws, config_ws, start_date, end_date):
+def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_store):
     """
-    Genera el contenido del archivo TXT para el ERP, con la lógica mejorada para terceros.
+    Genera el contenido del archivo TXT para el ERP, con filtros por fecha y tienda.
     """
     st.info("Generando archivo... Esto puede tardar unos segundos.")
     
@@ -91,16 +91,23 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         return None
 
     try:
-        filtered_records = [
+        # 1. Filtrado por fecha
+        date_filtered_records = [
             r for r in all_records
             if start_date <= datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y').date() <= end_date
         ]
+        # 2. Filtrado por tienda
+        if selected_store == "Todas las Tiendas":
+            filtered_records = date_filtered_records
+        else:
+            filtered_records = [r for r in date_filtered_records if r.get('Tienda') == selected_store]
+
     except ValueError as e:
         st.error(f"Error de formato de fecha en 'Registros'. Asegúrese que las fechas sean DD/MM/YYYY. Error: {e}")
         return None
 
     if not filtered_records:
-        st.warning("No se encontraron registros en el rango de fechas seleccionado.")
+        st.warning("No se encontraron registros en el rango de fechas y tienda seleccionados.")
         return None
 
     filtered_records.sort(key=lambda r: (r.get('Tienda', ''), r.get('Fecha', '')))
@@ -138,7 +145,10 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 if tipo_mov == 'TARJETA':
                     cuenta = account_mappings.get('Tarjetas', {}).get('cuenta', 'ERR_TARJETA')
                     serie_documento = f"T{centro_costo}"
-                    descripcion = f"Ventas planillas contado Tarjeta - {tienda_descripcion}"
+                    # --- INICIO DE MODIFICACIÓN 1 ---
+                    fecha_tarjeta = item.get('Fecha', '')
+                    descripcion = f"Ventas planillas contado Tarjeta {fecha_tarjeta} - {tienda_descripcion}"
+                    # --- FIN DE MODIFICACIÓN 1 ---
 
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
@@ -164,24 +174,17 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 elif tipo_mov == 'EFECTIVO':
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
-
-                    # --- INICIO DE MODIFICACIÓN SOLICITADA ---
-                    # 1. Se asigna la cuenta contable correspondiente al TIPO de movimiento de efectivo.
-                    #    Esta cuenta no cambiará, incluso si se selecciona un tercero.
+                    
                     cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
 
-                    # 2. Si es una entrega de efectivo y se especificó un tercero, se busca su NIT.
                     if tipo_especifico == "Efectivo Entregado" and destino_tercero and destino_tercero != "N/A":
                         tercero_info = account_mappings.get(destino_tercero)
                         if tercero_info:
-                            # Solo se extrae el NIT del tercero. La cuenta ya fue asignada.
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', destino_tercero)
                             descripcion = f"Ventas planillas contado Entrega efectivo a {nombre_tercero_desc} - {tienda_descripcion}"
                         else:
-                            # Si no se encuentra el tercero, se mantiene la descripción por defecto y NIT en "0".
                             descripcion = f"Ventas planillas contado Entrega efectivo a TERCERO_NO_ENCONTRADO({destino_tercero}) - {tienda_descripcion}"
-                    # --- FIN DE MODIFICACIÓN SOLICITADA ---
 
                 # Construcción de la línea final para el TXT
                 linea = "|".join([
@@ -344,29 +347,50 @@ def display_dynamic_list_section(title, key, form_inputs, options_map=None):
         st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(subtotal))
 
 # --- Secciones Específicas del Formulario ---
+# --- INICIO DE MODIFICACIÓN 2 ---
 def display_tarjetas_section():
+    """Muestra la sección para agregar y editar pagos con tarjeta, incluyendo fecha."""
     with st.expander("💳 **Tarjetas**", expanded=True):
         with st.form("form_tarjetas", clear_on_submit=True):
-            valor = st.number_input("Valor", min_value=1.0, step=1000.0, format="%.0f", label_visibility="collapsed", placeholder="Valor Tarjeta")
+            c1, c2 = st.columns(2)
+            valor = c1.number_input("Valor", min_value=1.0, step=1000.0, format="%.0f", label_visibility="collapsed", placeholder="Valor Tarjeta")
+            fecha = c2.date_input("Fecha", value=datetime.now().date(), label_visibility="collapsed", format="DD/MM/YYYY")
+            
             if st.form_submit_button("✚ Agregar Tarjeta", use_container_width=True):
                 if valor > 0:
-                    st.session_state.tarjetas.append({'Valor': valor})
+                    st.session_state.tarjetas.append({
+                        'Valor': valor,
+                        'Fecha': fecha.strftime("%d/%m/%Y")
+                    })
                     st.toast(f"Agregado: {format_currency(valor)}")
                     st.rerun()
+
         if st.session_state.tarjetas:
             df = pd.DataFrame(st.session_state.tarjetas)
             df['Eliminar'] = False
+            
+            # Reordenar columnas para mejor visualización
+            if 'Fecha' in df.columns:
+                 df = df[['Fecha', 'Valor', 'Eliminar']]
+
             edited_df = st.data_editor(
                 df, key='editor_tarjetas', hide_index=True, use_container_width=True,
-                column_config={"Valor": st.column_config.NumberColumn("Valor", format="$ %.0f"), "Eliminar": st.column_config.CheckboxColumn("Eliminar", width="small")}
+                column_config={
+                    "Valor": st.column_config.NumberColumn("Valor", format="$ %.0f", required=True),
+                    "Fecha": st.column_config.TextColumn("Fecha", required=True),
+                    "Eliminar": st.column_config.CheckboxColumn("Eliminar", width="small")
+                }
             )
+            
             if edited_df['Eliminar'].any():
                 st.session_state.tarjetas = [t for i, t in enumerate(st.session_state.tarjetas) if i not in edited_df[edited_df['Eliminar']].index]
                 st.toast("Tarjeta(s) eliminada(s).")
                 st.rerun()
             else:
                 st.session_state.tarjetas = edited_df.drop(columns=['Eliminar']).to_dict('records')
+                
         st.metric("Subtotal Tarjetas", format_currency(sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)))
+# --- FIN DE MODIFICACIÓN 2 ---
 
 def display_consignaciones_section(bancos_list):
     display_dynamic_list_section(
@@ -492,15 +516,19 @@ def render_form_page(worksheets, config):
 
     display_summary_and_save(registros_ws, consecutivos_ws)
 
-def render_reports_page(registros_ws, config_ws):
+def render_reports_page(registros_ws, config_ws, tiendas_list):
     """Renderiza la página de generación de reportes TXT."""
     st.header("Generación de Archivo Plano para ERP", divider="rainbow")
-    st.markdown("Seleccione un rango de fechas para generar el archivo TXT para el sistema contable.")
+    st.markdown("Seleccione una tienda y un rango de fechas para generar el archivo TXT para el sistema contable.")
 
     today = datetime.now().date()
-    col1, col2 = st.columns(2)
-    start_date = col1.date_input("Fecha de Inicio", today.replace(day=1))
-    end_date = col2.date_input("Fecha de Fin", today)
+    # --- INICIO DE MODIFICACIÓN 3 ---
+    col1, col2, col3 = st.columns(3)
+    tienda_options = ["Todas las Tiendas"] + tiendas_list
+    selected_store = col1.selectbox("Tienda", options=tienda_options)
+    start_date = col2.date_input("Fecha de Inicio", today.replace(day=1))
+    end_date = col3.date_input("Fecha de Fin", today)
+    # --- FIN DE MODIFICACIÓN 3 ---
 
     if start_date > end_date:
         st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin.")
@@ -508,7 +536,7 @@ def render_reports_page(registros_ws, config_ws):
 
     if st.button("📊 Generar Archivo TXT", use_container_width=True, type="primary"):
         with st.spinner('Generando...'):
-            txt_content = generate_txt_file(registros_ws, config_ws, start_date, end_date)
+            txt_content = generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_store)
             if txt_content:
                 st.download_button(
                     label="📥 Descargar Archivo .txt",
@@ -553,7 +581,7 @@ def main():
         if st.session_state.page == "Formulario":
             render_form_page(worksheets, config)
         elif st.session_state.page == "Reportes":
-            render_reports_page(registros_ws, config_ws)
+            render_reports_page(registros_ws, config_ws, tiendas)
     else:
         st.info("⏳ Esperando conexión con Google Sheets...")
 
