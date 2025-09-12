@@ -127,26 +127,23 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 if valor == 0: continue
                 total_debito_dia += valor
 
-                # --- INICIO DE MODIFICACIONES ---
-                # Valores por defecto para cada línea del TXT
+                # --- Lógica para cada línea del TXT ---
+                # Valores por defecto para cada línea
                 cuenta = ""
-                # MODIFICACIÓN: Iniciar NIT y Nombre en "0" por defecto.
                 nit_tercero = "0"
-                nombre_tercero_final = "0"
+                nombre_tercero_final = "0" 
                 serie_documento = centro_costo
                 descripcion = f"Ventas planillas contado {tienda_descripcion}"
                 
                 if tipo_mov == 'TARJETA':
                     cuenta = account_mappings.get('Tarjetas', {}).get('cuenta', 'ERR_TARJETA')
                     serie_documento = f"T{centro_costo}"
-                    # MODIFICACIÓN: Ajustar descripción para tarjetas.
                     descripcion = f"Ventas planillas contado Tarjeta - {tienda_descripcion}"
 
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
                     cuenta = account_mappings.get(banco, {}).get('cuenta', f'ERR_{banco}')
                     fecha_consignacion = item.get('Fecha', '')
-                    # MODIFICACIÓN: Ajustar descripción para consignaciones con fecha.
                     descripcion = f"Ventas planillas contado consignacion {fecha_consignacion} - {tienda_descripcion}"
 
                 elif tipo_mov == 'GASTO':
@@ -156,9 +153,7 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                     if gasto_tercero and gasto_tercero != "N/A":
                         tercero_info = account_mappings.get(gasto_tercero)
                         if tercero_info:
-                            # MODIFICACIÓN: Solo se asigna el NIT. El nombre final será "0".
                             nit_tercero = tercero_info.get('nit', '0')
-                            # Se mantiene la descripción original del gasto.
                             nombre_tercero_desc = tercero_info.get('nombre', gasto_tercero)
                             descripcion = f"{item.get('Descripción', 'Gasto')} - {nombre_tercero_desc}"
                         else:
@@ -170,34 +165,36 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
 
+                    # --- INICIO DE MODIFICACIÓN SOLICITADA ---
+                    # 1. Se asigna la cuenta contable correspondiente al TIPO de movimiento de efectivo.
+                    #    Esta cuenta no cambiará, incluso si se selecciona un tercero.
+                    cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
+
+                    # 2. Si es una entrega de efectivo y se especificó un tercero, se busca su NIT.
                     if tipo_especifico == "Efectivo Entregado" and destino_tercero and destino_tercero != "N/A":
                         tercero_info = account_mappings.get(destino_tercero)
                         if tercero_info:
-                            cuenta = tercero_info.get('cuenta', f'ERR_{destino_tercero}')
-                            # MODIFICACIÓN: Se asigna el NIT. El nombre final será "0".
+                            # Solo se extrae el NIT del tercero. La cuenta ya fue asignada.
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', destino_tercero)
-                            # MODIFICACIÓN: Se ajusta la descripción para entrega de efectivo.
                             descripcion = f"Ventas planillas contado Entrega efectivo a {nombre_tercero_desc} - {tienda_descripcion}"
                         else:
-                            cuenta = f'ERR_TERCERO_{destino_tercero}_NO_ENCONTRADO'
-                    else:
-                        cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
+                            # Si no se encuentra el tercero, se mantiene la descripción por defecto y NIT en "0".
+                            descripcion = f"Ventas planillas contado Entrega efectivo a TERCERO_NO_ENCONTRADO({destino_tercero}) - {tienda_descripcion}"
+                    # --- FIN DE MODIFICACIÓN SOLICITADA ---
 
-                # MODIFICACIÓN: Se usa `nombre_tercero_final` que siempre es "0".
+                # Construcción de la línea final para el TXT
                 linea = "|".join([
                     fecha_cuadre, str(consecutivo), str(cuenta), "8",
                     descripcion, serie_documento, str(consecutivo),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero_final, "0"
                 ])
                 txt_lines.append(linea)
-                # --- FIN DE MODIFICACIONES ---
 
         # Línea de contrapartida (crédito) para balancear los débitos del día
         if total_debito_dia > 0:
             cuenta_venta = "11050501" # Cuenta de caja general para las ventas
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
-            # MODIFICACIÓN: Se quita el NIT y Nombre de la empresa, se reemplaza por "0".
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivo), str(cuenta_venta), "8",
                 descripcion_credito, centro_costo, str(consecutivo),
@@ -206,6 +203,7 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
             txt_lines.append(linea_credito)
             
     return "\n".join(txt_lines)
+
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
 def initialize_session_state():
