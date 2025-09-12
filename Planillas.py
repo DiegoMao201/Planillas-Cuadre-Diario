@@ -40,10 +40,12 @@ def get_account_mappings(config_ws):
             cuenta = record.get("Cuenta Contable")
             
             if cuenta:
+                # Se convierte a string para asegurar consistencia
+                cuenta_str = str(cuenta)
                 if tipo == "BANCO" and detalle:
-                    mappings[detalle] = str(cuenta)
+                    mappings[str(detalle)] = cuenta_str
                 elif tipo and tipo != "BANCO":
-                    mappings[tipo] = str(cuenta)
+                    mappings[str(tipo)] = cuenta_str
         return mappings
     except Exception as e:
         st.error(f"No se pudo leer el mapeo de cuentas. Revisa la estructura de la hoja 'Configuracion'. Error: {e}")
@@ -79,9 +81,9 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
             st.warning(f"El registro de la tienda {record.get('Tienda')} del {record.get('Fecha')} no tiene un consecutivo asignado. Se usará '0'.")
 
         tienda_original = str(record.get('Tienda', ''))
+        # La descripción será el mismo código de tienda si no hay más texto.
         tienda_descripcion = re.sub(r'[\(\)]', '', tienda_original).strip()
-        centro_costo_match = re.search(r'\d+', tienda_original)
-        centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
+        centro_costo = tienda_original # Asumimos que la tienda es el centro de costo
         
         fecha_cuadre = record['Fecha']
         total_debito_dia = 0
@@ -222,18 +224,25 @@ def get_next_consecutive(consecutivos_ws, tienda):
                 '156': 11509, '189': 11566, '157': 10990,
                 '158': 11565, '238': 10924, '439': 11563
             }
-            centro_costo_match = re.search(r'\d+', tienda)
-            centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
+            # 'tienda' ya es un string que contiene el centro de costo.
+            centro_costo = tienda
             return starting_consecutives.get(centro_costo, 1000)
     except Exception as e:
-        # Se muestra el error original para un mejor diagnóstico.
         st.error(f"Error al obtener consecutivo: {e}")
         return None
 
+def update_consecutive(consecutivos_ws, tienda, new_consecutive):
+    """Actualiza o crea el registro del último consecutivo para una tienda."""
+    try:
+        cell = consecutivos_ws.find(tienda, in_column=1)
+        if cell:
+            consecutivos_ws.update_cell(cell.row, 2, new_consecutive)
+        else:
+            consecutivos_ws.append_row([tienda, new_consecutive])
+    except Exception as e:
+        st.error(f"Error al actualizar consecutivo: {e}")
+
 # --- FUNCIÓN DE GUARDADO ---
-# ==============================================================================
-# ======================== INICIO DEL CÓDIGO CORREGIDO =========================
-# ==============================================================================
 def display_summary_and_save(registros_ws, consecutivos_ws):
     """Muestra el resumen y maneja la lógica de guardado/actualización."""
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
@@ -258,8 +267,6 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
         )
         
         if st.button("💾 Guardar o Actualizar Cuadre", type="primary", use_container_width=True):
-            # --- NUEVA VALIDACIÓN ---
-            # Se comprueba que haya una tienda seleccionada antes de continuar.
             tienda_seleccionada = st.session_state.get("tienda_seleccionada")
             if not tienda_seleccionada:
                 st.warning("🛑 Por favor, seleccione una tienda antes de guardar.")
@@ -300,10 +307,6 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
 
             except Exception as e:
                 st.error(f"Error al guardar: {e}")
-
-# ==============================================================================
-# ========================= FIN DEL CÓDIGO CORREGIDO ===========================
-# ==============================================================================
 
 # --- FUNCIONES DE VISUALIZACIÓN ---
 def display_main_header(tiendas_list, registros_ws):
@@ -362,7 +365,6 @@ def display_tarjetas_section():
         subtotal_tarjetas = sum(float(item.get('Valor', 0)) for item in st.session_state.tarjetas)
         st.metric("Subtotal Tarjetas", format_currency(subtotal_tarjetas))
 
-
 def display_dynamic_list_section(title, key, form_inputs, bancos=None):
     with st.expander(f"**{title}**", expanded=True):
         with st.form(f"form_{key}",clear_on_submit=True):
@@ -396,7 +398,6 @@ def display_dynamic_list_section(title, key, form_inputs, bancos=None):
                 df_c=edited_df.drop(columns=['Eliminar'])
                 st.session_state[key]=df_c.to_dict('records')
         st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(sum(float(item.get('Valor',0)) for item in st.session_state[key])))
-
 
 def display_consignaciones_section(bancos_list):
     display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco"}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],bancos=bancos_list)
@@ -440,14 +441,20 @@ def main():
         
         try:
             config_data = config_ws.get_all_records()
-            tiendas = sorted(list(set(d['Tiendas'] for d in config_data if d.get('Tiendas'))))
-            bancos = sorted(list(set(d['Bancos/Detalle'] for d in config_data if d.get('Bancos/Detalle'))))
+            # ==============================================================================
+            # ======================== INICIO DEL CÓDIGO CORREGIDO =========================
+            # ==============================================================================
+            # Se convierte el ID de la tienda a string (texto) para evitar errores de tipo.
+            tiendas = sorted(list(set(str(d['Tiendas']) for d in config_data if d.get('Tiendas'))))
+            bancos = sorted(list(set(str(d['Bancos/Detalle']) for d in config_data if d.get('Bancos/Detalle'))))
+            # ==============================================================================
+            # ========================= FIN DEL CÓDIGO CORREGIDO ===========================
+            # ==============================================================================
+
         except Exception as e:
             st.error(f"Error al cargar datos de 'Configuracion': {e}")
             tiendas, bancos = [], []
 
-        # --- NUEVA VALIDACIÓN INICIAL ---
-        # Si no hay tiendas configuradas, se detiene la ejecución del formulario.
         if not tiendas and st.session_state.page == "Formulario":
             st.error("🚨 No se encontraron tiendas en la hoja de 'Configuracion'.")
             st.warning("Por favor, agregue al menos una tienda en la columna 'Tiendas' de su hoja de cálculo para poder continuar.")
