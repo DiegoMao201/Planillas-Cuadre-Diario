@@ -30,7 +30,10 @@ def connect_to_gsheet():
 
 # --- LÓGICA DE REPORTES ---
 def get_account_mappings(config_ws):
-    """Lee el mapeo de cuentas desde la hoja 'Configuracion'."""
+    """
+    Lee el mapeo de cuentas desde la hoja 'Configuracion'.
+    Ahora también incluye mapeos para proveedores con su cuenta, NIT y nombre.
+    """
     try:
         records = config_ws.get_all_records()
         mappings = {}
@@ -40,19 +43,25 @@ def get_account_mappings(config_ws):
             cuenta = record.get("Cuenta Contable")
             
             if cuenta:
-                # Se convierte a string para asegurar consistencia
                 cuenta_str = str(cuenta)
                 if tipo == "BANCO" and detalle:
-                    mappings[str(detalle)] = cuenta_str
-                elif tipo and tipo != "BANCO":
-                    mappings[str(tipo)] = cuenta_str
+                    mappings[str(detalle)] = {'cuenta': cuenta_str}
+                elif tipo == "PROVEEDOR" and detalle:
+                    # Almacena un diccionario con toda la info del proveedor
+                    mappings[str(detalle)] = {
+                        'cuenta': cuenta_str,
+                        'nit': str(record.get("NIT", "")),
+                        'nombre': str(record.get("Nombre Tercero", ""))
+                    }
+                elif tipo and tipo not in ["BANCO", "PROVEEDOR"]:
+                    mappings[str(tipo)] = {'cuenta': cuenta_str}
         return mappings
     except Exception as e:
         st.error(f"No se pudo leer el mapeo de cuentas. Revisa la estructura de la hoja 'Configuracion'. Error: {e}")
         return {}
 
 def generate_txt_file(registros_ws, config_ws, start_date, end_date):
-    """Genera el contenido del archivo TXT leyendo el consecutivo guardado."""
+    """Genera el contenido del archivo TXT con fecha en formato dd/mm/yyyy y lógica de proveedor."""
     st.info("Generando archivo... Esto puede tardar unos segundos.")
     
     all_records = registros_ws.get_all_records()
@@ -62,9 +71,10 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         st.error("No se pudo generar el reporte: Faltan las cuentas contables en 'Configuracion'.")
         return None
 
+    # El formato de fecha en la hoja de cálculo ahora es dd/mm/yyyy
     filtered_records = [
         r for r in all_records 
-        if start_date <= datetime.strptime(r.get('Fecha', '1900-01-01'), '%Y-%m-%d').date() <= end_date
+        if start_date <= datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y').date() <= end_date
     ]
 
     if not filtered_records:
@@ -81,10 +91,10 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
             st.warning(f"El registro de la tienda {record.get('Tienda')} del {record.get('Fecha')} no tiene un consecutivo asignado. Se usará '0'.")
 
         tienda_original = str(record.get('Tienda', ''))
-        # La descripción será el mismo código de tienda si no hay más texto.
         tienda_descripcion = re.sub(r'[\(\)]', '', tienda_original).strip()
-        centro_costo = tienda_original # Asumimos que la tienda es el centro de costo
+        centro_costo = tienda_original
         
+        # La fecha ya está en el formato correcto 'dd/mm/yyyy' desde la hoja
         fecha_cuadre = record['Fecha']
         total_debito_dia = 0
 
@@ -102,22 +112,37 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 total_debito_dia += valor
                 
                 cuenta = ""
+                # Valores por defecto para el tercero
                 nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC"
                 serie_documento = centro_costo
+                descripcion = f"Ventas planillas contado {tienda_descripcion}"
                 
                 if tipo_mov == 'TARJETA':
-                    cuenta = account_mappings.get('TARJETA', 'ERR_TARJETA')
+                    cuenta = account_mappings.get('TARJETA', {}).get('cuenta', 'ERR_TARJETA')
                     serie_documento = f"T{centro_costo}"
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
-                    cuenta = account_mappings.get(banco, f'ERR_{banco}')
+                    cuenta = account_mappings.get(banco, {}).get('cuenta', f'ERR_{banco}')
                 elif tipo_mov == 'GASTO':
-                    cuenta = account_mappings.get('GASTO', 'ERR_GASTO')
+                    cuenta = account_mappings.get('GASTO', {}).get('cuenta', 'ERR_GASTO')
                 elif tipo_mov == 'EFECTIVO':
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
-                    cuenta = account_mappings.get(tipo_especifico, f'ERR_{tipo_especifico}')
+                    proveedor_seleccionado = item.get('Proveedor')
 
-                descripcion = f"Ventas planillas contado {tienda_descripcion}"
+                    # Si se seleccionó un proveedor, se usan sus datos
+                    if tipo_especifico == "Efectivo Entregado" and proveedor_seleccionado and proveedor_seleccionado != "N/A":
+                        provider_info = account_mappings.get(proveedor_seleccionado)
+                        if provider_info:
+                            cuenta = provider_info.get('cuenta', f'ERR_{proveedor_seleccionado}')
+                            nit_tercero = provider_info.get('nit', nit_tercero)
+                            nombre_tercero = provider_info.get('nombre', nombre_tercero)
+                            # Se agrega el nombre del proveedor al concepto
+                            descripcion = f"Ventas planillas contado {tienda_descripcion} {nombre_tercero}"
+                        else:
+                            cuenta = f'ERR_{proveedor_seleccionado}'
+                    else:
+                        # Si no hay proveedor o es Reintegro, usa la cuenta genérica
+                        cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
 
                 linea = "|".join([
                     fecha_cuadre, str(consecutivo_del_registro), str(cuenta), "8",
@@ -127,7 +152,7 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 txt_lines.append(linea)
         
         if total_debito_dia > 0:
-            cuenta_venta = "11050501"
+            cuenta_venta = "11050501" # Cuenta de contrapartida (crédito)
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivo_del_registro), str(cuenta_venta), "8",
@@ -157,7 +182,7 @@ def render_reports_page(registros_ws, config_ws):
             st.download_button(
                 label="📥 Descargar Archivo .txt",
                 data=txt_content.encode('utf-8'),
-                file_name=f"contabilidad_{start_date}_a_{end_date}.txt",
+                file_name=f"contabilidad_{start_date.strftime('%Y%m%d')}_a_{end_date.strftime('%Y%m%d')}.txt",
                 mime="text/plain",
                 use_container_width=True
             )
@@ -189,7 +214,8 @@ def format_currency(num):
 
 def load_cuadre_data(registros_ws):
     """Carga los datos de un cuadre existente."""
-    id_registro = f"{st.session_state.tienda_seleccionada}-{st.session_state.fecha_seleccionada.strftime('%Y-%m-%d')}"
+    # Se formatea la fecha al nuevo estándar para buscar el ID
+    id_registro = f"{st.session_state.tienda_seleccionada}-{st.session_state.fecha_seleccionada.strftime('%d/%m/%Y')}"
     try:
         cell = registros_ws.find(id_registro, in_column=1)
         if cell:
@@ -220,11 +246,11 @@ def get_next_consecutive(consecutivos_ws, tienda):
             last_consecutive = int(consecutivos_ws.cell(cell.row, 2).value)
             return last_consecutive + 1
         else:
+            # Valores iniciales si la tienda no existe en la hoja 'Consecutivos'
             starting_consecutives = {
                 '156': 11509, '189': 11566, '157': 10990,
                 '158': 11565, '238': 10924, '439': 11563
             }
-            # 'tienda' ya es un string que contiene el centro de costo.
             centro_costo = tienda
             return starting_consecutives.get(centro_costo, 1000)
     except Exception as e:
@@ -244,7 +270,7 @@ def update_consecutive(consecutivos_ws, tienda, new_consecutive):
 
 # --- FUNCIÓN DE GUARDADO ---
 def display_summary_and_save(registros_ws, consecutivos_ws):
-    """Muestra el resumen y maneja la lógica de guardado/actualización."""
+    """Muestra el resumen y maneja la lógica de guardado/actualización con la fecha en formato dd/mm/yyyy."""
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
     with st.container(border=True):
         sub_t = sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)
@@ -276,7 +302,8 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
                 st.warning("Venta Total no puede ser cero.")
                 return
 
-            fecha_str = st.session_state.fecha_seleccionada.strftime("%Y-%m-%d")
+            # Se formatea la fecha al nuevo estándar dd/mm/yyyy para guardarla
+            fecha_str = st.session_state.fecha_seleccionada.strftime("%d/%m/%Y")
             id_r = f"{tienda_seleccionada}-{fecha_str}"
             
             try:
@@ -290,12 +317,17 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
                     if consecutivo_asignado is None: return
                     update_consecutive(consecutivos_ws, tienda_seleccionada, consecutivo_asignado)
 
+                # Convertir listas de diccionarios a strings JSON
+                tarjetas_str = json.dumps(st.session_state.tarjetas)
+                consignaciones_str = json.dumps(st.session_state.consignaciones)
+                gastos_str = json.dumps(st.session_state.gastos)
+                efectivo_str = json.dumps(st.session_state.efectivo)
+
                 fila = [
                     id_r, consecutivo_asignado, tienda_seleccionada, fecha_str,
                     st.session_state.factura_inicial, st.session_state.factura_final, venta_t,
-                    json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
-                    json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
-                    diferencia, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    tarjetas_str, consignaciones_str, gastos_str, efectivo_str,
+                    diferencia, datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                 ]
                 
                 if cell:
@@ -313,7 +345,8 @@ def display_main_header(tiendas_list, registros_ws):
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
     c1,c2,c3,c4 = st.columns([2,2,1,1])
     c1.selectbox("Tienda", options=tiendas_list, key="tienda_seleccionada", on_change=clear_form_state)
-    c2.date_input("Fecha", key="fecha_seleccionada", on_change=clear_form_state)
+    # Fecha con formato visual correcto, el guardado se ajusta después
+    c2.date_input("Fecha", key="fecha_seleccionada", on_change=clear_form_state, format="DD/MM/YYYY")
     c3.button("🔍 Cargar Cuadre", on_click=load_cuadre_data, args=[registros_ws], use_container_width=True)
     c4.button("✨ Iniciar Nuevo", on_click=clear_form_state, use_container_width=True)
 
@@ -325,13 +358,13 @@ def display_general_info_section():
         st.session_state.factura_final=c2.text_input("Factura Final", value=st.session_state.get('factura_final', ""))
         st.session_state.venta_total_dia=c3.number_input("💰 Venta Total (Sistema)",min_value=0.0,step=1000.0,value=float(st.session_state.get('venta_total_dia', 0.0)),format="%.0f")
 
-def display_payments_breakdown(bancos_list):
+def display_payments_breakdown(bancos_list, proveedores_list):
     with st.container(border=True):
         st.subheader("🧾 Desglose de Pagos")
         display_tarjetas_section()
         display_consignaciones_section(bancos_list)
         display_gastos_section()
-        display_efectivo_section()
+        display_efectivo_section(proveedores_list)
 
 def display_tarjetas_section():
     """Sección para tarjetas, ahora más robusta."""
@@ -365,55 +398,95 @@ def display_tarjetas_section():
         subtotal_tarjetas = sum(float(item.get('Valor', 0)) for item in st.session_state.tarjetas)
         st.metric("Subtotal Tarjetas", format_currency(subtotal_tarjetas))
 
-def display_dynamic_list_section(title, key, form_inputs, bancos=None):
+def display_dynamic_list_section(title, key, form_inputs, options_map=None):
+    if options_map is None:
+        options_map = {}
+    
     with st.expander(f"**{title}**", expanded=True):
-        with st.form(f"form_{key}",clear_on_submit=True):
-            cols=st.columns(len(form_inputs))
-            data={}
-            for i,(k,t,o) in enumerate(form_inputs):
-                if t=="selectbox": data[k]=cols[i].selectbox(o['label'],options=bancos if k=="Banco" else o['options'], label_visibility="collapsed")
-                elif t=="number_input": data[k]=cols[i].number_input(o['label'],min_value=0.0,step=1000.0,format="%.0f", label_visibility="collapsed")
-                elif t=="date_input": data[k]=cols[i].date_input(o['label'],value=datetime.now().date(), label_visibility="collapsed")
-                else: data[k]=cols[i].text_input(o['label'], label_visibility="collapsed")
+        with st.form(f"form_{key}", clear_on_submit=True):
+            cols = st.columns(len(form_inputs))
+            data = {}
+            for i, (k, t, o) in enumerate(form_inputs):
+                if t == "selectbox":
+                    # Usa las opciones del mapa si están disponibles
+                    options_list = options_map.get(k, o.get('options', []))
+                    data[k] = cols[i].selectbox(o['label'], options=options_list, label_visibility="collapsed")
+                elif t == "number_input":
+                    data[k] = cols[i].number_input(o['label'], min_value=0.0, step=1000.0, format="%.0f", label_visibility="collapsed")
+                elif t == "date_input":
+                    data[k] = cols[i].date_input(o['label'], value=datetime.now().date(), label_visibility="collapsed", format="DD/MM/YYYY")
+                else:
+                    data[k] = cols[i].text_input(o['label'], label_visibility="collapsed")
+
             if st.form_submit_button(f"Agregar {title.split(' ')[1][:-1]}", use_container_width=True):
-                if data.get("Valor",0)>0:
-                    if 'Fecha' in data: data['Fecha']=data['Fecha'].strftime("%Y-%m-%d")
+                if data.get("Valor", 0) > 0:
+                    # Formatea la fecha en el nuevo formato si existe
+                    if 'Fecha' in data and isinstance(data['Fecha'], datetime):
+                        data['Fecha'] = data['Fecha'].strftime("%d/%m/%Y")
                     st.session_state[key].append(data)
                     st.toast("Registro agregado.")
                     st.rerun()
+
         if st.session_state[key]:
-            df=pd.DataFrame(st.session_state[key])
-            df['Eliminar']=False
-            config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f"), "Eliminar":st.column_config.CheckboxColumn("Eliminar",width="small")}
-            if "Banco" in df.columns: config["Banco"] = st.column_config.SelectboxColumn("Banco", options=bancos, required=True)
-            if "Tipo" in df.columns: config["Tipo"] = st.column_config.SelectboxColumn("Tipo", options=["Efectivo Entregado","Reintegro Caja Menor"], required=True)
-            
-            edited_df=st.data_editor(df,key=f'editor_{key}',hide_index=True,use_container_width=True,column_config=config)
+            df = pd.DataFrame(st.session_state[key])
+            df['Eliminar'] = False
+            config = {
+                "Valor": st.column_config.NumberColumn("Valor", format="$ %.0f"),
+                "Eliminar": st.column_config.CheckboxColumn("Eliminar", width="small")
+            }
+            # Configuración dinámica de columnas Selectbox
+            for col_name, options_list in options_map.items():
+                if col_name in df.columns:
+                    config[col_name] = st.column_config.SelectboxColumn(col_name, options=options_list, required=True)
+
+            edited_df = st.data_editor(df, key=f'editor_{key}', hide_index=True, use_container_width=True, column_config=config)
             
             if edited_df['Eliminar'].any(): 
-                st.session_state[key]=[item for i,item in enumerate(st.session_state[key]) if i not in edited_df[edited_df['Eliminar']].index]
+                st.session_state[key] = [item for i, item in enumerate(st.session_state[key]) if i not in edited_df[edited_df['Eliminar']].index]
                 st.toast("Registro(s) eliminado(s).")
                 st.rerun()
             else: 
-                df_c=edited_df.drop(columns=['Eliminar'])
-                st.session_state[key]=df_c.to_dict('records')
-        st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(sum(float(item.get('Valor',0)) for item in st.session_state[key])))
+                df_c = edited_df.drop(columns=['Eliminar'])
+                st.session_state[key] = df_c.to_dict('records')
+
+        st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(sum(float(item.get('Valor', 0)) for item in st.session_state[key])))
 
 def display_consignaciones_section(bancos_list):
-    display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco"}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],bancos=bancos_list)
+    display_dynamic_list_section(
+        "🏦 Consignaciones", "consignaciones",
+        [("Banco", "selectbox", {"label": "Banco"}),
+         ("Valor", "number_input", {"label": "Valor"}),
+         ("Fecha", "date_input", {"label": "Fecha"})],
+        options_map={"Banco": bancos_list}
+    )
 
 def display_gastos_section():
-    display_dynamic_list_section("💸 Gastos","gastos",[("Descripción","text_input",{"label":"Descripción"}),("Valor","number_input",{"label":"Valor"})])
+    display_dynamic_list_section(
+        "💸 Gastos", "gastos",
+        [("Descripción", "text_input", {"label": "Descripción"}),
+         ("Valor", "number_input", {"label": "Valor"})]
+    )
 
-def display_efectivo_section():
-    display_dynamic_list_section("💵 Efectivo","efectivo",[("Tipo","selectbox",{"label":"Tipo Movimiento","options":["Efectivo Entregado","Reintegro Caja Menor"]}),("Valor","number_input",{"label":"Valor"})])
-    
-def render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos):
+def display_efectivo_section(proveedores_list):
+    # Se agrega una opción "N/A" para cuando el efectivo no es para un proveedor
+    proveedores_con_na = ["N/A"] + proveedores_list
+    display_dynamic_list_section(
+        "💵 Efectivo", "efectivo",
+        [("Tipo", "selectbox", {"label": "Tipo Movimiento", "options": ["Efectivo Entregado", "Reintegro Caja Menor"]}),
+         ("Proveedor", "selectbox", {"label": "Proveedor"}),
+         ("Valor", "number_input", {"label": "Valor"})],
+        options_map={
+            "Tipo": ["Efectivo Entregado", "Reintegro Caja Menor"],
+            "Proveedor": proveedores_con_na
+        }
+    )
+
+def render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos, proveedores):
     display_main_header(tiendas, registros_ws)
     st.divider()
     st.header("2. Formulario de Cuadre", anchor=False, divider="rainbow")
     display_general_info_section()
-    display_payments_breakdown(bancos)
+    display_payments_breakdown(bancos, proveedores)
     display_summary_and_save(registros_ws, consecutivos_ws)
 
 # --- FLUJO PRINCIPAL ---
@@ -422,6 +495,7 @@ def main():
     
     try:
         c1, c2 = st.columns([1, 4])
+        # Asegúrate de que el logo esté en la misma carpeta o proporciona la ruta completa
         c1.image("LOGO FERREINOX SAS BIC 2024.PNG", width=150)
         c2.title("CUADRE DIARIO DE CAJA")
     except Exception:
@@ -441,19 +515,15 @@ def main():
         
         try:
             config_data = config_ws.get_all_records()
-            # ==============================================================================
-            # ======================== INICIO DEL CÓDIGO CORREGIDO =========================
-            # ==============================================================================
             # Se convierte el ID de la tienda a string (texto) para evitar errores de tipo.
             tiendas = sorted(list(set(str(d['Tiendas']) for d in config_data if d.get('Tiendas'))))
-            bancos = sorted(list(set(str(d['Bancos/Detalle']) for d in config_data if d.get('Bancos/Detalle'))))
-            # ==============================================================================
-            # ========================= FIN DEL CÓDIGO CORREGIDO ===========================
-            # ==============================================================================
+            bancos = sorted(list(set(str(d['Bancos/Detalle']) for d in config_data if d.get('Tipo Movimiento') == 'BANCO' and d.get('Bancos/Detalle'))))
+            # Nueva lógica para obtener la lista de proveedores
+            proveedores = sorted(list(set(str(d['Bancos/Detalle']) for d in config_data if d.get('Tipo Movimiento') == 'PROVEEDOR' and d.get('Bancos/Detalle'))))
 
         except Exception as e:
             st.error(f"Error al cargar datos de 'Configuracion': {e}")
-            tiendas, bancos = [], []
+            tiendas, bancos, proveedores = [], [], []
 
         if not tiendas and st.session_state.page == "Formulario":
             st.error("🚨 No se encontraron tiendas en la hoja de 'Configuracion'.")
@@ -461,7 +531,7 @@ def main():
             return
 
         if st.session_state.page == "Formulario":
-            render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos)
+            render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos, proveedores)
         elif st.session_state.page == "Reportes":
             render_reports_page(registros_ws, config_ws)
     else:
