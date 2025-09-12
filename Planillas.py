@@ -1,5 +1,3 @@
-# Planillas.py
-
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -129,33 +127,40 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 if valor == 0: continue
                 total_debito_dia += valor
 
+                # --- INICIO DE MODIFICACIONES ---
                 # Valores por defecto para cada línea del TXT
                 cuenta = ""
-                nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC" # NIT de la empresa
+                # MODIFICACIÓN: Iniciar NIT y Nombre en "0" por defecto.
+                nit_tercero = "0"
+                nombre_tercero_final = "0"
                 serie_documento = centro_costo
                 descripcion = f"Ventas planillas contado {tienda_descripcion}"
                 
                 if tipo_mov == 'TARJETA':
-                    # CORRECCIÓN: Se usa 'Tarjetas' para que coincida con la columna "Detalle" de la hoja.
                     cuenta = account_mappings.get('Tarjetas', {}).get('cuenta', 'ERR_TARJETA')
                     serie_documento = f"T{centro_costo}"
+                    # MODIFICACIÓN: Ajustar descripción para tarjetas.
+                    descripcion = f"Ventas planillas contado Tarjeta - {tienda_descripcion}"
 
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
                     cuenta = account_mappings.get(banco, {}).get('cuenta', f'ERR_{banco}')
+                    fecha_consignacion = item.get('Fecha', '')
+                    # MODIFICACIÓN: Ajustar descripción para consignaciones con fecha.
+                    descripcion = f"Ventas planillas contado consignacion {fecha_consignacion} - {tienda_descripcion}"
 
                 elif tipo_mov == 'GASTO':
-                    # Asume una entrada genérica para gastos en 'Configuracion' (Ej: Detalle='Gastos Varios')
                     cuenta = account_mappings.get('Gastos Varios', {}).get('cuenta', 'ERR_GASTO')
                     gasto_tercero = item.get('Tercero')
                     
                     if gasto_tercero and gasto_tercero != "N/A":
                         tercero_info = account_mappings.get(gasto_tercero)
                         if tercero_info:
-                            # Para gastos, se mantiene la cuenta del gasto pero se informa el NIT del tercero.
-                            nit_tercero = tercero_info.get('nit', nit_tercero)
-                            nombre_tercero = tercero_info.get('nombre', nombre_tercero)
-                            descripcion = f"{item.get('Descripción', 'Gasto')} - {nombre_tercero}"
+                            # MODIFICACIÓN: Solo se asigna el NIT. El nombre final será "0".
+                            nit_tercero = tercero_info.get('nit', '0')
+                            # Se mantiene la descripción original del gasto.
+                            nombre_tercero_desc = tercero_info.get('nombre', gasto_tercero)
+                            descripcion = f"{item.get('Descripción', 'Gasto')} - {nombre_tercero_desc}"
                         else:
                             descripcion = f"{item.get('Descripción', 'Gasto')} (Tercero {gasto_tercero} no encontrado)"
                     else:
@@ -165,37 +170,38 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
 
-                    # MEJORA: Lógica para manejar el efectivo entregado a un proveedor.
                     if tipo_especifico == "Efectivo Entregado" and destino_tercero and destino_tercero != "N/A":
                         tercero_info = account_mappings.get(destino_tercero)
                         if tercero_info:
-                            # Se usa la cuenta, NIT y nombre del tercero seleccionado.
                             cuenta = tercero_info.get('cuenta', f'ERR_{destino_tercero}')
-                            nit_tercero = tercero_info.get('nit', nit_tercero)
-                            nombre_tercero = tercero_info.get('nombre', nombre_tercero)
-                            # Se actualiza la descripción para mayor claridad.
-                            descripcion = f"Entrega efectivo a {nombre_tercero} - {tienda_descripcion}"
+                            # MODIFICACIÓN: Se asigna el NIT. El nombre final será "0".
+                            nit_tercero = tercero_info.get('nit', '0')
+                            nombre_tercero_desc = tercero_info.get('nombre', destino_tercero)
+                            # MODIFICACIÓN: Se ajusta la descripción para entrega de efectivo.
+                            descripcion = f"Ventas planillas contado Entrega efectivo a {nombre_tercero_desc} - {tienda_descripcion}"
                         else:
                             cuenta = f'ERR_TERCERO_{destino_tercero}_NO_ENCONTRADO'
                     else:
-                        # Para otros movimientos de efectivo (ej: Reintegro), se usa la cuenta genérica.
                         cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
 
+                # MODIFICACIÓN: Se usa `nombre_tercero_final` que siempre es "0".
                 linea = "|".join([
                     fecha_cuadre, str(consecutivo), str(cuenta), "8",
                     descripcion, serie_documento, str(consecutivo),
-                    str(valor), "0", centro_costo, nit_tercero, nombre_tercero, "0"
+                    str(valor), "0", centro_costo, nit_tercero, nombre_tercero_final, "0"
                 ])
                 txt_lines.append(linea)
+                # --- FIN DE MODIFICACIONES ---
 
         # Línea de contrapartida (crédito) para balancear los débitos del día
         if total_debito_dia > 0:
             cuenta_venta = "11050501" # Cuenta de caja general para las ventas
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
+            # MODIFICACIÓN: Se quita el NIT y Nombre de la empresa, se reemplaza por "0".
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivo), str(cuenta_venta), "8",
                 descripcion_credito, centro_costo, str(consecutivo),
-                "0", str(total_debito_dia), centro_costo, "800224617", "FERREINOX SAS BIC", "0"
+                "0", str(total_debito_dia), centro_costo, "0", "0", "0"
             ])
             txt_lines.append(linea_credito)
             
@@ -342,7 +348,6 @@ def display_dynamic_list_section(title, key, form_inputs, options_map=None):
 # --- Secciones Específicas del Formulario ---
 def display_tarjetas_section():
     with st.expander("💳 **Tarjetas**", expanded=True):
-        # ... (código sin cambios, ya que es simple y funciona bien)
         with st.form("form_tarjetas", clear_on_submit=True):
             valor = st.number_input("Valor", min_value=1.0, step=1000.0, format="%.0f", label_visibility="collapsed", placeholder="Valor Tarjeta")
             if st.form_submit_button("✚ Agregar Tarjeta", use_container_width=True):
