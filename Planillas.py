@@ -83,13 +83,14 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         if not tienda_original:
             continue # Si la tienda está vacía, se salta esta fila para evitar errores.
 
-        # --- INICIO DE LA CORRECCIÓN ---
-        # 1. Quitar paréntesis de la tienda para la descripción
-        tienda_descripcion = tienda_original.replace("(", "").replace(")", "").strip()
-        # 2. Extraer solo el número para el centro de costo
+        # Extrae el nombre de la tienda sin los paréntesis para usarlo en descripciones.
+        # Ejemplo: de "Tienda (158)" se obtiene "Tienda 158"
+        tienda_descripcion = re.sub(r'[\(\)]', '', tienda_original).strip()
+        
+        # Extrae solo el número de la tienda para usarlo como centro de costo y en la serie.
+        # Ejemplo: de "Tienda (158)" se obtiene "158"
         centro_costo_match = re.search(r'\d+', tienda_original)
         centro_costo = centro_costo_match.group(0) if centro_costo_match else '0'
-        # --- FIN DE LA CORRECCIÓN ---
 
         consecutivos_tienda[tienda_original] = consecutivos_tienda.get(tienda_original, 1000) + 1
         
@@ -116,31 +117,35 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 total_debito_dia += valor
                 
                 cuenta = ""
-                # El campo 'serie' por defecto es el nombre de la tienda sin paréntesis
-                serie_documento = tienda_descripcion 
+                # El campo 'serie' por defecto es el centro de costo (solo el número)
+                serie_documento = centro_costo 
                 nit_tercero, nombre_tercero = "800224617", "FERREINOX SAS BIC"
 
                 if tipo_mov == 'TARJETA':
-                    # --- INICIO DE LA CORRECCIÓN ---
-                    # 3. La serie para tarjetas lleva una 'T' al inicio
                     cuenta = account_mappings.get('TARJETA', 'ERR_TARJETA')
+                    # >>> INICIO DE LA MODIFICACIÓN #2 <<<
+                    # Si es tarjeta, se le antepone la 'T' al centro de costo
                     serie_documento = f"T{centro_costo}"
-                    # --- FIN DE LA CORRECCIÓN ---
+                    # >>> FIN DE LA MODIFICACIÓN #2 <<<
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
                     cuenta = account_mappings.get(banco, f'ERR_{banco}')
                 elif tipo_mov == 'GASTO':
                     cuenta = account_mappings.get('GASTO', 'ERR_GASTO')
                 elif tipo_mov == 'EFECTIVO':
-                    # --- INICIO DE LA CORRECCIÓN ---
-                    # 4. Leer la cuenta correcta para "Efectivo Entregado" o "Reintegro Caja Menor"
-                    tipo_especifico = item.get('Tipo', 'Efectivo Entregado') # Obtiene el tipo desde el JSON
+                    tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     cuenta = account_mappings.get(tipo_especifico, f'ERR_{tipo_especifico}')
-                    # --- FIN DE LA CORRECCIÓN ---
+
+                # >>> INICIO DE LA MODIFICACIÓN #1 <<<
+                # Se genera la descripción sin los paréntesis, como solicitaste.
+                descripcion = f"Ventas planillas contado {tienda_descripcion}"
+                # >>> FIN DE LA MODIFICACIÓN #1 <<<
 
                 linea = "|".join([
                     fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta), "999",
-                    f"Ventas planillas contado ({tienda_descripcion})", serie_documento, str(consecutivo_sistema),
+                    descripcion, # Campo modificado
+                    serie_documento, # Campo modificado
+                    str(consecutivo_sistema),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea)
@@ -148,14 +153,18 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
         
         # 2. LÍNEA DE CRÉDITO (TOTAL DE LA VENTA)
         if total_debito_dia > 0:
-            # --- INICIO DE LA CORRECCIÓN ---
-            # 5. La cuenta de crédito (contrapartida) es fija
             cuenta_venta = "11050501" 
-            # --- FIN DE LA CORRECCIÓN ---
+            
+            # >>> INICIO DE LA MODIFICACIÓN #1 (También en la línea de crédito) <<<
+            # Se genera la descripción sin los paréntesis, como solicitaste.
+            descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
+            # >>> FIN DE LA MODIFICACIÓN #1 <<<
             
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivos_tienda[tienda_original]), str(cuenta_venta), "999",
-                f"Ventas planillas contado ({tienda_descripcion})", tienda_descripcion, str(consecutivo_sistema),
+                descripcion_credito, # Campo modificado
+                centro_costo, # La serie aquí es solo el número de la tienda
+                str(consecutivo_sistema),
                 "0", str(total_debito_dia), centro_costo, "800224617", "FERREINOX SAS BIC", "0"
             ])
             txt_lines.append(linea_credito)
