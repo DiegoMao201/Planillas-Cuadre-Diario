@@ -11,7 +11,6 @@ import re
 st.set_page_config(layout="wide", page_title="Cuadre Diario de Caja")
 
 # --- CONEXIÓN A GOOGLE SHEETS ---
-# MODIFICADO: Ahora también se conecta a la hoja 'Consecutivos'
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
     """Establece conexión segura con Google Sheets y las 3 hojas de trabajo."""
@@ -23,15 +22,13 @@ def connect_to_gsheet():
         sheet = client.open(st.secrets["google_sheets"]["spreadsheet_name"])
         registros_ws = sheet.worksheet(st.secrets["google_sheets"]["registros_sheet_name"])
         config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
-        # NUEVO: Conexión a la hoja de consecutivos
         consecutivos_ws = sheet.worksheet("Consecutivos") 
         return registros_ws, config_ws, consecutivos_ws
     except Exception as e:
         st.error(f"Error al conectar con Google Sheets: {e}")
         return None, None, None
 
-# --- LÓGICA DE REPORTES (MODIFICADA PARA SER MÁS SIMPLE) ---
-
+# --- LÓGICA DE REPORTES ---
 def get_account_mappings(config_ws):
     """Lee el mapeo de cuentas desde la hoja 'Configuracion'."""
     try:
@@ -53,10 +50,7 @@ def get_account_mappings(config_ws):
         return {}
 
 def generate_txt_file(registros_ws, config_ws, start_date, end_date):
-    """
-    Genera el contenido del archivo TXT.
-    MODIFICADO: Ahora lee el consecutivo que ya fue guardado en la hoja 'Registros'.
-    """
+    """Genera el contenido del archivo TXT leyendo el consecutivo guardado."""
     st.info("Generando archivo... Esto puede tardar unos segundos.")
     
     all_records = registros_ws.get_all_records()
@@ -80,9 +74,8 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
     txt_lines = []
     
     for record in filtered_records:
-        # SIMPLIFICADO: Lee el consecutivo directamente del registro.
         consecutivo_del_registro = record.get('Consecutivo_Asignado', '0')
-        if consecutivo_del_registro == '0':
+        if consecutivo_del_registro == '0' or not consecutivo_del_registro:
             st.warning(f"El registro de la tienda {record.get('Tienda')} del {record.get('Fecha')} no tiene un consecutivo asignado. Se usará '0'.")
 
         tienda_original = str(record.get('Tienda', ''))
@@ -100,7 +93,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
             'EFECTIVO': json.loads(record.get('Efectivo', '[]'))
         }
 
-        # 1. LÍNEAS DE DÉBITO
         for tipo_mov, data_list in movimientos.items():
             for item in data_list:
                 valor = float(item.get('Valor', 0)) if isinstance(item, dict) else float(item)
@@ -132,7 +124,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date):
                 ])
                 txt_lines.append(linea)
         
-        # 2. LÍNEA DE CRÉDITO
         if total_debito_dia > 0:
             cuenta_venta = "11050501"
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
@@ -170,8 +161,7 @@ def render_reports_page(registros_ws, config_ws):
             )
             st.success("Archivo generado y listo para descargar.")
 
-# --- LÓGICA DEL FORMULARIO (MODIFICADA PARA ASIGNAR Y GUARDAR CONSECUTIVOS) ---
-
+# --- LÓGICA DEL FORMULARIO ---
 def initialize_session_state():
     defaults = {
         'page': 'Formulario', 'venta_total_dia': 0.0, 'factura_inicial': "", 'factura_final': "",
@@ -181,7 +171,6 @@ def initialize_session_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-# ... (Las funciones clear_form_state, format_currency, etc., no cambian) ...
 def clear_form_state():
     tienda = st.session_state.get('tienda_seleccionada', None)
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
@@ -196,31 +185,40 @@ def clear_form_state():
 def format_currency(num):
     return f"${int(num):,}".replace(",", ".") if isinstance(num, (int, float)) else "$0"
 
+# ==============================================================================
+# ======================== INICIO DEL CÓDIGO CORREGIDO =========================
+# ==============================================================================
 def load_cuadre_data(registros_ws):
+    """Carga los datos de un cuadre existente. CORREGIDO para leer las columnas correctas."""
     id_registro = f"{st.session_state.tienda_seleccionada}-{st.session_state.fecha_seleccionada.strftime('%Y-%m-%d')}"
     try:
         cell = registros_ws.find(id_registro, in_column=1)
         if cell:
-            # El orden de las columnas ahora importa por la nueva columna B
-            row_data = registros_ws.get(f'A{cell.row}:M{cell.row}')[0]
+            row_data = registros_ws.get(f'A{cell.row}:M{cell.row}')[0] # Lee 13 columnas
             clear_form_state() 
-            # Ajustar índices según la nueva estructura de 13 columnas
-            st.session_state.factura_inicial = row_data[3] if len(row_data) > 3 else ""
-            st.session_state.factura_final = row_data[4] if len(row_data) > 4 else ""
-            st.session_state.venta_total_dia = float(row_data[5]) if len(row_data) > 5 and row_data[5] else 0.0
-            st.session_state.tarjetas = json.loads(row_data[6]) if len(row_data) > 6 and row_data[6] else []
-            st.session_state.consignaciones = json.loads(row_data[7]) if len(row_data) > 7 and row_data[7] else []
-            st.session_state.gastos = json.loads(row_data[8]) if len(row_data) > 8 and row_data[8] else []
-            st.session_state.efectivo = json.loads(row_data[9]) if len(row_data) > 9 and row_data[9] else []
+            
+            # --- CORRECCIÓN DE ÍNDICES ---
+            # Se ajustaron todos los índices sumando 1 para compensar la nueva columna en B.
+            st.session_state.factura_inicial = row_data[4] if len(row_data) > 4 else ""
+            st.session_state.factura_final = row_data[5] if len(row_data) > 5 else ""
+            st.session_state.venta_total_dia = float(row_data[6]) if len(row_data) > 6 and row_data[6] else 0.0
+            st.session_state.tarjetas = json.loads(row_data[7]) if len(row_data) > 7 and row_data[7] else []
+            st.session_state.consignaciones = json.loads(row_data[8]) if len(row_data) > 8 and row_data[8] else []
+            st.session_state.gastos = json.loads(row_data[9]) if len(row_data) > 9 and row_data[9] else []
+            st.session_state.efectivo = json.loads(row_data[10]) if len(row_data) > 10 and row_data[10] else []
             st.toast("✅ Cuadre cargado.", icon="📄")
         else:
             st.warning("No se encontró cuadre para esta selección.")
             clear_form_state()
     except Exception as e:
-        st.error(f"Error al cargar datos: {e}")
+        st.error(f"Error al cargar datos. Verifica la estructura de la hoja 'Registros'. Error: {e}")
         clear_form_state()
+# ==============================================================================
+# ========================= FIN DEL CÓDIGO CORREGIDO ===========================
+# ==============================================================================
 
-# --- NUEVAS FUNCIONES PARA MANEJAR CONSECUTIVOS ---
+
+# --- FUNCIONES PARA MANEJAR CONSECUTIVOS ---
 def get_next_consecutive(consecutivos_ws, tienda):
     """Obtiene el siguiente número consecutivo para una tienda."""
     try:
@@ -229,7 +227,6 @@ def get_next_consecutive(consecutivos_ws, tienda):
             last_consecutive = int(consecutivos_ws.cell(cell.row, 2).value)
             return last_consecutive + 1
         else:
-            # Si la tienda no existe, busca el número inicial
             starting_consecutives = {
                 '156': 11509, '189': 11566, '157': 10990,
                 '158': 11565, '238': 10924, '439': 11563
@@ -252,26 +249,28 @@ def update_consecutive(consecutivos_ws, tienda, new_consecutive):
     except Exception as e:
         st.error(f"Error al actualizar consecutivo: {e}")
 
-# --- FUNCIÓN DE GUARDADO MODIFICADA ---
+# --- FUNCIÓN DE GUARDADO ---
 def display_summary_and_save(registros_ws, consecutivos_ws):
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
     with st.container(border=True):
-        sub_t = sum(t.get('Valor', 0) for t in st.session_state.tarjetas)
-        sub_c = sum(c.get('Valor', 0) for c in st.session_state.consignaciones)
-        sub_g = sum(g.get('Valor', 0) for g in st.session_state.gastos)
-        sub_e = sum(e.get('Valor', 0) for e in st.session_state.efectivo)
+        sub_t = sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)
+        sub_c = sum(float(c.get('Valor', 0)) for c in st.session_state.consignaciones)
+        sub_g = sum(float(g.get('Valor', 0)) for g in st.session_state.gastos)
+        sub_e = sum(float(e.get('Valor', 0)) for e in st.session_state.efectivo)
         total_d = sub_t + sub_c + sub_g + sub_e
-        venta_t = st.session_state.venta_total_dia
+        venta_t = float(st.session_state.get('venta_total_dia', 0.0))
         diferencia = venta_t - total_d
         
         v1, v2, v3 = st.columns(3)
         v1.metric("💰 Venta Total (Sistema)", format_currency(venta_t))
         v2.metric("📊 Suma del Desglose", format_currency(total_d))
         
-        if diferencia == 0:
-            v3.metric("✅ Diferencia (Cuadre OK)", format_currency(diferencia))
-        else:
-            v3.metric("❌ Diferencia (Revisar)", format_currency(diferencia), delta=format_currency(diferencia), delta_color="inverse")
+        v3.metric(
+            "✅ Diferencia" if diferencia == 0 else "❌ Diferencia",
+            format_currency(diferencia),
+            delta=format_currency(diferencia) if diferencia != 0 else None,
+            delta_color="inverse" if diferencia != 0 else "off"
+        )
         
         if st.button("💾 Guardar o Actualizar Cuadre", type="primary", use_container_width=True):
             if venta_t == 0:
@@ -284,31 +283,20 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
             try:
                 cell = registros_ws.find(id_r, in_column=1)
                 
-                if cell:  # Es una ACTUALIZACIÓN
-                    # Leemos el consecutivo que ya tiene asignado para no cambiarlo
+                if cell:
                     consecutivo_asignado = registros_ws.cell(cell.row, 2).value
                     st.info(f"Actualizando registro. El consecutivo se mantendrá: {consecutivo_asignado}")
-                else:  # Es un NUEVO registro
-                    # Obtenemos un nuevo consecutivo y lo actualizamos en la hoja 'Consecutivos'
+                else:
                     consecutivo_asignado = get_next_consecutive(consecutivos_ws, st.session_state.tienda_seleccionada)
-                    if consecutivo_asignado is None: return # Detener si hay error
+                    if consecutivo_asignado is None: return
                     update_consecutive(consecutivos_ws, st.session_state.tienda_seleccionada, consecutivo_asignado)
 
-                # Construimos la fila con las 13 columnas en el orden correcto
                 fila = [
-                    id_r,
-                    consecutivo_asignado,  # Nueva columna
-                    st.session_state.tienda_seleccionada,
-                    fecha_str,
-                    st.session_state.factura_inicial,
-                    st.session_state.factura_final,
-                    venta_t,
-                    json.dumps(st.session_state.tarjetas),
-                    json.dumps(st.session_state.consignaciones),
-                    json.dumps(st.session_state.gastos),
-                    json.dumps(st.session_state.efectivo),
-                    diferencia,
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    id_r, consecutivo_asignado, st.session_state.tienda_seleccionada, fecha_str,
+                    st.session_state.factura_inicial, st.session_state.factura_final, venta_t,
+                    json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
+                    json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
+                    diferencia, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 ]
                 
                 if cell:
@@ -321,10 +309,11 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
             except Exception as e:
                 st.error(f"Error al guardar: {e}")
 
-# ... (El resto de las funciones de visualización no cambian) ...
+# --- FUNCIONES DE VISUALIZACIÓN ---
 def display_main_header(tiendas_list, registros_ws):
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
     c1,c2,c3,c4 = st.columns([2,2,1,1])
+    # Usar 'on_change' para limpiar el formulario si se cambia la tienda o la fecha
     c1.selectbox("Tienda", options=tiendas_list, key="tienda_seleccionada", on_change=clear_form_state)
     c2.date_input("Fecha", key="fecha_seleccionada", on_change=clear_form_state)
     c3.button("🔍 Cargar Cuadre", on_click=load_cuadre_data, args=[registros_ws], use_container_width=True)
@@ -334,8 +323,8 @@ def display_general_info_section():
     with st.container(border=True):
         st.subheader("📋 Información General")
         c1,c2,c3=st.columns(3)
-        st.session_state.factura_inicial=c1.text_input("Factura Inicial",value=st.session_state.factura_inicial)
-        st.session_state.factura_final=c2.text_input("Factura Final",value=st.session_state.factura_final)
+        st.session_state.factura_inicial=c1.text_input("Factura Inicial", value=st.session_state.get('factura_inicial', ""))
+        st.session_state.factura_final=c2.text_input("Factura Final", value=st.session_state.get('factura_final', ""))
         st.session_state.venta_total_dia=c3.number_input("💰 Venta Total (Sistema)",min_value=0.0,step=1000.0,value=float(st.session_state.get('venta_total_dia', 0.0)),format="%.0f")
 
 def display_payments_breakdown(bancos_list):
@@ -347,26 +336,39 @@ def display_payments_breakdown(bancos_list):
         display_efectivo_section()
 
 def display_tarjetas_section():
+    """Sección para tarjetas, ahora más robusta."""
     with st.expander("💳 **Tarjetas**", expanded=True):
-        with st.form("form_tarjetas",clear_on_submit=True):
-            valor=st.number_input("Valor",min_value=1.0,step=1000.0,format="%.0f",label_visibility="collapsed")
-            if st.form_submit_button("Agregar Tarjeta",use_container_width=True):
-                if valor>0: 
+        with st.form("form_tarjetas", clear_on_submit=True):
+            valor = st.number_input("Valor", min_value=1.0, step=1000.0, format="%.0f", label_visibility="collapsed")
+            if st.form_submit_button("Agregar Tarjeta", use_container_width=True):
+                if valor > 0: 
                     st.session_state.tarjetas.append({'Valor': valor})
                     st.toast(f"Agregado: {format_currency(valor)}")
                     st.rerun()
         if st.session_state.tarjetas:
-            df=pd.DataFrame(st.session_state.tarjetas)
-            df['Eliminar']=False
-            edited_df=st.data_editor(df,key='editor_tarjetas',hide_index=True,use_container_width=True,column_config={"Valor":st.column_config.NumberColumn("Valor",format="$ %.0f"),"Eliminar":st.column_config.CheckboxColumn("Eliminar",width="small")})
+            # Estandariza los datos para asegurar que sea una lista de diccionarios
+            df_data = [item if isinstance(item, dict) else {'Valor': item} for item in st.session_state.tarjetas]
+            df = pd.DataFrame(df_data)
+            df['Eliminar'] = False
+            
+            edited_df = st.data_editor(
+                df, key='editor_tarjetas', hide_index=True, use_container_width=True,
+                column_config={"Valor": st.column_config.NumberColumn("Valor", format="$ %.0f"), "Eliminar": st.column_config.CheckboxColumn("Eliminar", width="small")}
+            )
+            
             if edited_df['Eliminar'].any(): 
-                st.session_state.tarjetas=[t for i,t in enumerate(st.session_state.tarjetas) if i not in edited_df[edited_df['Eliminar']].index]
+                st.session_state.tarjetas = [t for i, t in enumerate(df_data) if i not in edited_df[edited_df['Eliminar']].index]
                 st.toast("Tarjeta(s) eliminada(s).")
                 st.rerun()
-            else: 
-                st.session_state.tarjetas=[{'Valor': float(v['Valor'])} for v in edited_df.to_dict('records')]
-        subtotal_tarjetas = sum(item.get('Valor', 0) for item in st.session_state.tarjetas)
-        st.metric("Subtotal Tarjetas",format_currency(subtotal_tarjetas))
+            else:
+                # Procesa los datos editados de forma segura
+                cleaned_df = edited_df.drop(columns=['Eliminar'])
+                cleaned_df['Valor'] = pd.to_numeric(cleaned_df['Valor'], errors='coerce').fillna(0)
+                st.session_state.tarjetas = cleaned_df[['Valor']].to_dict('records')
+
+        subtotal_tarjetas = sum(float(item.get('Valor', 0)) for item in st.session_state.tarjetas)
+        st.metric("Subtotal Tarjetas", format_currency(subtotal_tarjetas))
+
 
 def display_dynamic_list_section(title, key, form_inputs, bancos=None):
     with st.expander(f"**{title}**", expanded=True):
@@ -402,6 +404,7 @@ def display_dynamic_list_section(title, key, form_inputs, bancos=None):
                 st.session_state[key]=df_c.to_dict('records')
         st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(sum(float(item.get('Valor',0)) for item in st.session_state[key])))
 
+
 def display_consignaciones_section(bancos_list):
     display_dynamic_list_section("🏦 Consignaciones","consignaciones",[("Banco","selectbox",{"label":"Banco"}),("Valor","number_input",{"label":"Valor"}),("Fecha","date_input",{"label":"Fecha"})],bancos=bancos_list)
 
@@ -419,19 +422,17 @@ def render_form_page(registros_ws, config_ws, consecutivos_ws, tiendas, bancos):
     display_payments_breakdown(bancos)
     display_summary_and_save(registros_ws, consecutivos_ws)
 
-# --- FLUJO PRINCIPAL DE LA APLICACIÓN ---
+# --- FLUJO PRINCIPAL ---
 def main():
     initialize_session_state()
     
     try:
         c1, c2 = st.columns([1, 4])
-        # Asegúrate de que el logo esté en la misma carpeta que tu script
         c1.image("LOGO FERREINOX SAS BIC 2024.PNG", width=150)
         c2.title("CUADRE DIARIO DE CAJA")
     except Exception:
         st.title("CUADRE DIARIO DE CAJA")
 
-    # MODIFICADO: Ahora recibe la tercera hoja de trabajo
     registros_ws, config_ws, consecutivos_ws = connect_to_gsheet()
 
     if all([registros_ws, config_ws, consecutivos_ws]):
