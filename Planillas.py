@@ -104,9 +104,8 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            # CORRECCIÓN: Se usa .strip() en el campo 'Tienda' de los registros 
-            # para asegurar que la comparación con `selected_store` no falle por espacios en blanco.
-            filtered_records = [r for r in date_filtered_records if r.get('Tienda', '').strip() == selected_store]
+            # CORRECCIÓN: Se convierte a string antes de usar .strip() para manejar tiendas numéricas.
+            filtered_records = [r for r in date_filtered_records if str(r.get('Tienda', '')).strip() == selected_store]
 
     except ValueError as e:
         st.error(f"Error de formato de fecha en 'Registros'. Asegúrese que las fechas sean DD/MM/YYYY. Error: {e}")
@@ -225,9 +224,8 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            # CORRECCIÓN: Se usa .strip() en el campo 'Tienda' de los registros
-            # para asegurar que la comparación con `selected_store` no falle por espacios en blanco.
-            filtered_records = [r for r in date_filtered_records if r.get('Tienda', '').strip() == selected_store]
+            # CORRECCIÓN: Se convierte a string antes de usar .strip() para manejar tiendas numéricas.
+            filtered_records = [r for r in date_filtered_records if str(r.get('Tienda', '')).strip() == selected_store]
     except Exception as e:
         st.error(f"Error al filtrar registros para Excel: {e}")
         return None
@@ -729,3 +727,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
