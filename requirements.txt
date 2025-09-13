@@ -6,3 +6,4 @@ pyjanitor
 gspread
 oauth2client
 dropbox
+openpyxl
