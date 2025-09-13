@@ -39,12 +39,14 @@ def connect_to_gsheet():
 def get_app_config(config_ws):
     """
     Carga la configuración esencial (tiendas, bancos, terceros) desde la hoja 'Configuracion'.
+    CORRECCIÓN: Se usa .strip() para eliminar espacios en blanco al inicio/final que pueden
+    causar problemas en los filtros. También se asegura de ignorar filas vacías.
     """
     try:
         config_data = config_ws.get_all_records()
-        tiendas = sorted(list(set(str(d['Detalle']) for d in config_data if d.get('Tipo Movimiento') == 'TIENDA')))
-        bancos = sorted(list(set(str(d['Detalle']) for d in config_data if d.get('Tipo Movimiento') == 'BANCO' and d.get('Detalle'))))
-        terceros = sorted(list(set(str(d['Detalle']) for d in config_data if d.get('Tipo Movimiento') == 'TERCERO' and d.get('Detalle'))))
+        tiendas = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TIENDA' and d.get('Detalle'))))
+        bancos = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'BANCO' and d.get('Detalle'))))
+        terceros = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TERCERO' and d.get('Detalle'))))
         return tiendas, bancos, terceros
     except Exception as e:
         st.error(f"Error al cargar la configuración de tiendas, bancos y terceros: {e}")
@@ -64,7 +66,7 @@ def get_account_mappings(config_ws):
             cuenta = record.get("Cuenta Contable")
 
             if detalle and cuenta:
-                detalle_str = str(detalle)
+                detalle_str = str(detalle).strip() # Se usa .strip() para consistencia
                 cuenta_str = str(cuenta)
                 if tipo in ["BANCO", "TERCERO"]:
                     mappings[detalle_str] = {
@@ -102,7 +104,9 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            filtered_records = [r for r in date_filtered_records if r.get('Tienda') == selected_store]
+            # CORRECCIÓN: Se usa .strip() en el campo 'Tienda' de los registros 
+            # para asegurar que la comparación con `selected_store` no falle por espacios en blanco.
+            filtered_records = [r for r in date_filtered_records if r.get('Tienda', '').strip() == selected_store]
 
     except ValueError as e:
         st.error(f"Error de formato de fecha en 'Registros'. Asegúrese que las fechas sean DD/MM/YYYY. Error: {e}")
@@ -221,7 +225,9 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            filtered_records = [r for r in date_filtered_records if r.get('Tienda') == selected_store]
+            # CORRECCIÓN: Se usa .strip() en el campo 'Tienda' de los registros
+            # para asegurar que la comparación con `selected_store` no falle por espacios en blanco.
+            filtered_records = [r for r in date_filtered_records if r.get('Tienda', '').strip() == selected_store]
     except Exception as e:
         st.error(f"Error al filtrar registros para Excel: {e}")
         return None
@@ -700,7 +706,7 @@ def main():
                 key="page_radio",
                 label_visibility="collapsed"
             )
-            # Cambia el nombre de la página de reportes
+            
             if page_selection == "📝 Formulario de Cuadre":
                 st.session_state.page = "Formulario"
             else:
