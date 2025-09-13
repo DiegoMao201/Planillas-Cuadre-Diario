@@ -5,6 +5,10 @@ from datetime import datetime
 import json
 import pandas as pd
 import re
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Cuadre Diario de Caja")
@@ -62,14 +66,12 @@ def get_account_mappings(config_ws):
             if detalle and cuenta:
                 detalle_str = str(detalle)
                 cuenta_str = str(cuenta)
-                # Para Bancos y Terceros, guardamos todos los datos (cuenta, nit, nombre)
                 if tipo in ["BANCO", "TERCERO"]:
                     mappings[detalle_str] = {
                         'cuenta': cuenta_str,
                         'nit': str(record.get("NIT", "")),
                         'nombre': str(record.get("Nombre Tercero", ""))
                     }
-                # Para otros tipos, guardamos la cuenta por defecto asociada a su 'Detalle'
                 elif tipo in ["GASTO", "TARJETA", "EFECTIVO"]:
                     mappings[detalle_str] = {'cuenta': cuenta_str}
         return mappings
@@ -81,7 +83,7 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
     """
     Genera el contenido del archivo TXT para el ERP, con filtros por fecha y tienda.
     """
-    st.info("Generando archivo... Esto puede tardar unos segundos.")
+    st.info("Generando archivo TXT... Esto puede tardar unos segundos.")
     
     all_records = registros_ws.get_all_records()
     account_mappings = get_account_mappings(config_ws)
@@ -135,7 +137,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                 total_debito_dia += valor
 
                 # --- Lógica para cada línea del TXT ---
-                # Valores por defecto para cada línea
                 cuenta = ""
                 nit_tercero = "0"
                 nombre_tercero_final = "0" 
@@ -145,10 +146,8 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                 if tipo_mov == 'TARJETA':
                     cuenta = account_mappings.get('Tarjetas', {}).get('cuenta', 'ERR_TARJETA')
                     serie_documento = f"T{centro_costo}"
-                    # --- INICIO DE MODIFICACIÓN 1 ---
                     fecha_tarjeta = item.get('Fecha', '')
                     descripcion = f"Ventas planillas contado Tarjeta {fecha_tarjeta} - {tienda_descripcion}"
-                    # --- FIN DE MODIFICACIÓN 1 ---
 
                 elif tipo_mov == 'CONSIGNACION':
                     banco = item.get('Banco')
@@ -186,7 +185,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                         else:
                             descripcion = f"Ventas planillas contado Entrega efectivo a TERCERO_NO_ENCONTRADO({destino_tercero}) - {tienda_descripcion}"
 
-                # Construcción de la línea final para el TXT
                 linea = "|".join([
                     fecha_cuadre, str(consecutivo), str(cuenta), "8",
                     descripcion, serie_documento, str(consecutivo),
@@ -206,6 +204,131 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
             txt_lines.append(linea_credito)
             
     return "\n".join(txt_lines)
+
+# --- INICIO DE NUEVA FUNCIÓN: GENERADOR DE EXCEL ---
+def generate_excel_report(registros_ws, start_date, end_date, selected_store):
+    """
+    Genera un archivo Excel con formato profesional como soporte del cuadre de caja.
+    """
+    st.info("Generando reporte Excel... El estilo lo es todo.")
+
+    try:
+        all_records = registros_ws.get_all_records()
+        date_filtered_records = [
+            r for r in all_records
+            if start_date <= datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y').date() <= end_date
+        ]
+        if selected_store == "Todas las Tiendas":
+            filtered_records = date_filtered_records
+        else:
+            filtered_records = [r for r in date_filtered_records if r.get('Tienda') == selected_store]
+    except Exception as e:
+        st.error(f"Error al filtrar registros para Excel: {e}")
+        return None
+
+    if not filtered_records:
+        st.warning("No se encontraron registros para generar el reporte Excel.")
+        return None
+    
+    filtered_records.sort(key=lambda r: (datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y'), r.get('Tienda', '')))
+    
+    report_data = []
+    for record in filtered_records:
+        tienda = record.get('Tienda', 'N/A')
+        fecha = record.get('Fecha', 'N/A')
+        venta_total = float(record.get('Venta Total (Sistema)', 0))
+        
+        # Agregar una fila por cada tipo de movimiento para el resumen
+        report_data.append({
+            "Fecha": fecha, "Tienda": tienda, "Tipo de Movimiento": "VENTA TOTAL (SISTEMA)",
+            "Detalle": f"Factura Inicial: {record.get('Factura Inicial', 'N/A')} / Final: {record.get('Factura Final', 'N/A')}",
+            "Tercero / Banco": "", "Valor": venta_total
+        })
+
+        movimientos = {
+            'Tarjetas': json.loads(record.get('Tarjetas', '[]')),
+            'Consignaciones': json.loads(record.get('Consignaciones', '[]')),
+            'Gastos': json.loads(record.get('Gastos', '[]')),
+            'Efectivo': json.loads(record.get('Efectivo', '[]'))
+        }
+
+        for tipo, data_list in movimientos.items():
+            for item in data_list:
+                report_data.append({
+                    "Fecha": item.get('Fecha', fecha), "Tienda": tienda, "Tipo de Movimiento": tipo.upper(),
+                    "Detalle": item.get('Descripción', item.get('Tipo', '')),
+                    "Tercero / Banco": item.get('Tercero', item.get('Banco', item.get('Destino/Tercero (Opcional)', ''))),
+                    "Valor": float(item.get('Valor', 0))
+                })
+
+    if not report_data:
+        st.warning("No hay datos de movimientos para generar el Excel.")
+        return None
+
+    df = pd.DataFrame(report_data)
+
+    output = io.BytesIO()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "Reporte Cuadre de Caja"
+
+    # --- Estilos ---
+    font_title = Font(name='Calibri', size=18, bold=True, color="FFFFFF")
+    fill_title = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
+    align_center = Alignment(horizontal='center', vertical='center')
+    
+    font_header = Font(name='Calibri', size=11, bold=True, color="FFFFFF")
+    fill_header = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    font_total = Font(name='Calibri', size=11, bold=True)
+    fill_total = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+
+    # --- Título ---
+    ws.merge_cells('A1:F2')
+    title_cell = ws['A1']
+    title_cell.value = f"REPORTE DE CUADRE DIARIO - {selected_store.upper()}"
+    title_cell.font = font_title
+    title_cell.fill = fill_title
+    title_cell.alignment = align_center
+
+    ws['A3'] = f"Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
+    ws.merge_cells('A3:F3')
+    ws['A3'].alignment = align_center
+    ws['A3'].font = Font(name='Calibri', size=12, italic=True)
+
+    # --- Headers ---
+    headers = list(df.columns)
+    for col_num, header_title in enumerate(headers, 1):
+        cell = ws.cell(row=5, column=col_num, value=header_title)
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    # --- Escribir Datos ---
+    for r_idx, row in enumerate(df.itertuples(), 6):
+        for c_idx, value in enumerate(row[1:], 1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=value)
+            cell.border = thin_border
+            if isinstance(value, (int, float)):
+                cell.number_format = '$ #,##0'
+                cell.alignment = Alignment(horizontal='right')
+            else:
+                cell.alignment = Alignment(horizontal='left')
+    
+    # --- Ajustar Ancho de Columnas ---
+    column_widths = {'A': 12, 'B': 20, 'C': 25, 'D': 35, 'E': 25, 'F': 18}
+    for col, width in column_widths.items():
+        ws.column_dimensions[col].width = width
+
+    # --- Guardar en Buffer ---
+    workbook.save(output)
+    output.seek(0)
+    
+    return output.getvalue()
+# --- FIN DE NUEVA FUNCIÓN ---
 
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
@@ -266,7 +389,6 @@ def load_cuadre_data(registros_ws):
         st.error(f"Error al cargar datos. Verifique la hoja 'Registros'. Error: {e}")
         clear_form_state()
 
-# --- Gestión de Consecutivos ---
 def get_next_consecutive(consecutivos_ws, tienda):
     """Obtiene el siguiente número consecutivo para una tienda."""
     try:
@@ -292,7 +414,6 @@ def update_consecutive(consecutivos_ws, tienda, new_consecutive):
     except Exception as e:
         st.error(f"Error al actualizar consecutivo: {e}")
 
-# --- Generador de Secciones Dinámicas del Formulario ---
 def display_dynamic_list_section(title, key, form_inputs, options_map=None):
     """Función reutilizable para crear secciones del formulario (consignaciones, gastos, etc.)."""
     if options_map is None: options_map = {}
@@ -346,8 +467,6 @@ def display_dynamic_list_section(title, key, form_inputs, options_map=None):
         subtotal = sum(float(item.get('Valor', 0)) for item in st.session_state[key])
         st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(subtotal))
 
-# --- Secciones Específicas del Formulario ---
-# --- INICIO DE MODIFICACIÓN 2 ---
 def display_tarjetas_section():
     """Muestra la sección para agregar y editar pagos con tarjeta, incluyendo fecha."""
     with st.expander("💳 **Tarjetas**", expanded=True):
@@ -369,9 +488,8 @@ def display_tarjetas_section():
             df = pd.DataFrame(st.session_state.tarjetas)
             df['Eliminar'] = False
             
-            # Reordenar columnas para mejor visualización
             if 'Fecha' in df.columns:
-                 df = df[['Fecha', 'Valor', 'Eliminar']]
+                df = df[['Fecha', 'Valor', 'Eliminar']]
 
             edited_df = st.data_editor(
                 df, key='editor_tarjetas', hide_index=True, use_container_width=True,
@@ -390,7 +508,6 @@ def display_tarjetas_section():
                 st.session_state.tarjetas = edited_df.drop(columns=['Eliminar']).to_dict('records')
                 
         st.metric("Subtotal Tarjetas", format_currency(sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)))
-# --- FIN DE MODIFICACIÓN 2 ---
 
 def display_consignaciones_section(bancos_list):
     display_dynamic_list_section(
@@ -424,7 +541,6 @@ def display_efectivo_section(terceros_list):
         }
     )
 
-# --- Sección de Resumen y Guardado ---
 def display_summary_and_save(registros_ws, consecutivos_ws):
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
     with st.container(border=True):
@@ -517,35 +633,54 @@ def render_form_page(worksheets, config):
     display_summary_and_save(registros_ws, consecutivos_ws)
 
 def render_reports_page(registros_ws, config_ws, tiendas_list):
-    """Renderiza la página de generación de reportes TXT."""
-    st.header("Generación de Archivo Plano para ERP", divider="rainbow")
-    st.markdown("Seleccione una tienda y un rango de fechas para generar el archivo TXT para el sistema contable.")
+    """Renderiza la página de generación de reportes."""
+    st.header("Generación de Archivos y Reportes", divider="rainbow")
+    st.markdown("Seleccione una tienda y un rango de fechas para generar los archivos para el sistema contable y los reportes de soporte.")
 
     today = datetime.now().date()
-    # --- INICIO DE MODIFICACIÓN 3 ---
     col1, col2, col3 = st.columns(3)
     tienda_options = ["Todas las Tiendas"] + tiendas_list
     selected_store = col1.selectbox("Tienda", options=tienda_options)
     start_date = col2.date_input("Fecha de Inicio", today.replace(day=1))
     end_date = col3.date_input("Fecha de Fin", today)
-    # --- FIN DE MODIFICACIÓN 3 ---
 
     if start_date > end_date:
         st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin.")
         return
 
-    if st.button("📊 Generar Archivo TXT", use_container_width=True, type="primary"):
-        with st.spinner('Generando...'):
-            txt_content = generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_store)
-            if txt_content:
-                st.download_button(
-                    label="📥 Descargar Archivo .txt",
-                    data=txt_content.encode('utf-8'),
-                    file_name=f"contabilidad_{start_date.strftime('%Y%m%d')}_a_{end_date.strftime('%Y%m%d')}.txt",
-                    mime="text/plain",
-                    use_container_width=True
-                )
-                st.success("Archivo generado y listo para descargar.")
+    st.divider()
+    
+    # --- Contenedores para botones de generación ---
+    b1, b2 = st.columns(2)
+
+    with b1:
+        if st.button("📄 Generar Archivo TXT", use_container_width=True, type="primary"):
+            with st.spinner('Generando TXT...'):
+                txt_content = generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_store)
+                if txt_content:
+                    st.download_button(
+                        label="📥 Descargar Archivo .txt",
+                        data=txt_content.encode('utf-8'),
+                        file_name=f"contabilidad_{selected_store.replace(' ','_')}_{start_date.strftime('%Y%m%d')}_a_{end_date.strftime('%Y%m%d')}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+                    st.success("Archivo TXT generado.")
+    
+    with b2:
+        if st.button("📊 Generar Reporte Excel", use_container_width=True, type="primary"):
+            with st.spinner('Creando un Excel impecable...'):
+                excel_data = generate_excel_report(registros_ws, start_date, end_date, selected_store)
+                if excel_data:
+                    st.download_button(
+                        label="📥 Descargar Reporte .xlsx",
+                        data=excel_data,
+                        file_name=f"Reporte_Cuadre_{selected_store.replace(' ','_')}_{start_date.strftime('%Y%m%d')}_a_{end_date.strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                    st.success("Reporte Excel generado.")
+
 
 # --- 7. FLUJO PRINCIPAL DE LA APLICACIÓN ---
 def main():
@@ -561,10 +696,11 @@ def main():
             st.header("Navegación")
             page_selection = st.radio(
                 "Seleccione una página",
-                ["📝 Formulario de Cuadre", "📈 Reportes TXT"],
+                ["📝 Formulario de Cuadre", "📈 Reportes"],
                 key="page_radio",
                 label_visibility="collapsed"
             )
+            # Cambia el nombre de la página de reportes
             if page_selection == "📝 Formulario de Cuadre":
                 st.session_state.page = "Formulario"
             else:
