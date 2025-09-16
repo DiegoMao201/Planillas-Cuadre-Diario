@@ -171,22 +171,30 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                     fecha_consignacion = item.get('Fecha', '')
                     descripcion = f"Ventas planillas contado consignacion {fecha_consignacion} - {tienda_descripcion}"
 
+                # --- CORRECCIÓN EN LA LÓGICA DE GASTOS ---
+                # Se reestructura esta sección para asignar la cuenta contable correcta.
                 elif tipo_mov == 'GASTO':
-                    cuenta = account_mappings.get('Gastos Varios', {}).get('cuenta', 'ERR_GASTO')
                     gasto_tercero = item.get('Tercero')
                     
+                    # Primero, se verifica si el gasto se asignó a un tercero específico.
                     if gasto_tercero and gasto_tercero != "N/A":
                         tercero_info = account_mappings.get(gasto_tercero)
                         if tercero_info:
+                            # SI SE ENCUENTRA EL TERCERO: Se usa su cuenta contable y su NIT.
+                            cuenta = tercero_info.get('cuenta', f'ERR_TERCERO_{gasto_tercero}')
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', gasto_tercero)
                             descripcion = f"{item.get('Descripción', 'Gasto')} - {nombre_tercero_desc}"
                         else:
+                            # SI NO SE ENCUENTRA: Se usa la cuenta de gasto general y se notifica en la descripción.
+                            cuenta = account_mappings.get('Reintegro Caja Menor', {}).get('cuenta', 'ERR_GASTO')
                             descripcion = f"{item.get('Descripción', 'Gasto')} (Tercero {gasto_tercero} no encontrado)"
                     else:
+                        # SI NO HAY TERCERO: Se usa la cuenta de gasto general (Reintegro Caja Menor).
+                        cuenta = account_mappings.get('Reintegro Caja Menor', {}).get('cuenta', 'ERR_GASTO')
                         descripcion = item.get('Descripción', 'Gasto Varios')
+                # --- FIN DE LA CORRECCIÓN ---
 
-                # --- NUEVA LÓGICA MEJORADA PARA EFECTIVO ---
                 elif tipo_mov == 'EFECTIVO':
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
@@ -208,7 +216,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                     else:
                         # Para otros movimientos de efectivo (ej. Reintegro), usa la lógica original.
                         cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
-                # --- FIN DE LA NUEVA LÓGICA ---
 
                 # --- CAMBIO EN LA CONSTRUCCIÓN DE LA LÍNEA ---
                 # Columna 2: Nuevo consecutivo del documento.
@@ -236,6 +243,7 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
             txt_lines.append(linea_credito)
             
     return "\n".join(txt_lines)
+
 # --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE EXCEL ---
 def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     """
