@@ -208,12 +208,13 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
             
     return "\n".join(txt_lines)
 
-# --- INICIO DE NUEVA FUNCIÓN: GENERADOR DE EXCEL ---
+# --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE EXCEL ---
 def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     """
-    Genera un archivo Excel con formato profesional como soporte del cuadre de caja.
+    Genera un archivo Excel profesional y detallado para la revisión del cuadre de caja.
+    Agrupa por día, totaliza categorías y resalta diferencias.
     """
-    st.info("Generando reporte Excel... El estilo lo es todo.")
+    st.info("Generando reporte Excel profesional... Esto puede tardar unos segundos.")
 
     try:
         all_records = registros_ws.get_all_records()
@@ -224,7 +225,6 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            # CORRECCIÓN: Se convierte a string antes de usar .strip() para manejar tiendas numéricas.
             filtered_records = [r for r in date_filtered_records if str(r.get('Tienda', '')).strip() == selected_store]
     except Exception as e:
         st.error(f"Error al filtrar registros para Excel: {e}")
@@ -234,62 +234,35 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         st.warning("No se encontraron registros para generar el reporte Excel.")
         return None
     
+    # Ordenar por fecha y luego por tienda
     filtered_records.sort(key=lambda r: (datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y'), r.get('Tienda', '')))
-    
-    report_data = []
-    for record in filtered_records:
-        tienda = record.get('Tienda', 'N/A')
-        fecha = record.get('Fecha', 'N/A')
-        venta_total = float(record.get('Venta Total (Sistema)', 0))
-        
-        # Agregar una fila por cada tipo de movimiento para el resumen
-        report_data.append({
-            "Fecha": fecha, "Tienda": tienda, "Tipo de Movimiento": "VENTA TOTAL (SISTEMA)",
-            "Detalle": f"Factura Inicial: {record.get('Factura Inicial', 'N/A')} / Final: {record.get('Factura Final', 'N/A')}",
-            "Tercero / Banco": "", "Valor": venta_total
-        })
-
-        movimientos = {
-            'Tarjetas': json.loads(record.get('Tarjetas', '[]')),
-            'Consignaciones': json.loads(record.get('Consignaciones', '[]')),
-            'Gastos': json.loads(record.get('Gastos', '[]')),
-            'Efectivo': json.loads(record.get('Efectivo', '[]'))
-        }
-
-        for tipo, data_list in movimientos.items():
-            for item in data_list:
-                report_data.append({
-                    "Fecha": item.get('Fecha', fecha), "Tienda": tienda, "Tipo de Movimiento": tipo.upper(),
-                    "Detalle": item.get('Descripción', item.get('Tipo', '')),
-                    "Tercero / Banco": item.get('Tercero', item.get('Banco', item.get('Destino/Tercero (Opcional)', ''))),
-                    "Valor": float(item.get('Valor', 0))
-                })
-
-    if not report_data:
-        st.warning("No hay datos de movimientos para generar el Excel.")
-        return None
-
-    df = pd.DataFrame(report_data)
 
     output = io.BytesIO()
     workbook = Workbook()
     ws = workbook.active
     ws.title = "Reporte Cuadre de Caja"
 
-    # --- Estilos ---
+    # --- Definición de Estilos ---
     font_title = Font(name='Calibri', size=18, bold=True, color="FFFFFF")
     fill_title = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
-    align_center = Alignment(horizontal='center', vertical='center')
-    
     font_header = Font(name='Calibri', size=11, bold=True, color="FFFFFF")
     fill_header = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-
+    font_day_header = Font(name='Calibri', size=14, bold=True, color="FFFFFF")
+    fill_day_header = PatternFill(start_color="0070C0", end_color="0070C0", fill_type="solid")
+    font_category = Font(name='Calibri', size=11, bold=True)
+    fill_category = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+    font_total_label = Font(name='Calibri', size=12, bold=True)
+    font_total_value = Font(name='Calibri', size=12, bold=True)
+    fill_summary = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    font_diff_ok = Font(name='Calibri', size=12, bold=True, color="00B050")
+    font_diff_bad = Font(name='Calibri', size=12, bold=True, color="C00000")
+    align_center = Alignment(horizontal='center', vertical='center')
+    align_right = Alignment(horizontal='right', vertical='center')
+    align_left = Alignment(horizontal='left', vertical='center')
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    
-    font_total = Font(name='Calibri', size=11, bold=True)
-    fill_total = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    currency_format = '$ #,##0'
 
-    # --- Título ---
+    # --- Título Principal ---
     ws.merge_cells('A1:F2')
     title_cell = ws['A1']
     title_cell.value = f"REPORTE DE CUADRE DIARIO - {selected_store.upper()}"
@@ -297,33 +270,124 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     title_cell.fill = fill_title
     title_cell.alignment = align_center
 
-    ws['A3'] = f"Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
     ws.merge_cells('A3:F3')
+    ws['A3'].value = f"Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
     ws['A3'].alignment = align_center
     ws['A3'].font = Font(name='Calibri', size=12, italic=True)
-
-    # --- Headers ---
-    headers = list(df.columns)
-    for col_num, header_title in enumerate(headers, 1):
-        cell = ws.cell(row=5, column=col_num, value=header_title)
-        cell.font = font_header
-        cell.fill = fill_header
-        cell.border = thin_border
-        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-
-    # --- Escribir Datos ---
-    for r_idx, row in enumerate(df.itertuples(), 6):
-        for c_idx, value in enumerate(row[1:], 1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=value)
-            cell.border = thin_border
-            if isinstance(value, (int, float)):
-                cell.number_format = '$ #,##0'
-                cell.alignment = Alignment(horizontal='right')
-            else:
-                cell.alignment = Alignment(horizontal='left')
     
+    current_row = 5
+
+    # --- Iterar sobre cada registro (día/tienda) ---
+    for record in filtered_records:
+        fecha_str = record.get('Fecha', 'N/A')
+        tienda = record.get('Tienda', 'N/A')
+        
+        # --- Cabecera del Día ---
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+        day_header_cell = ws.cell(row=current_row, column=1, value=f"Resumen del Día: {fecha_str} - Tienda: {tienda}")
+        day_header_cell.font = font_day_header
+        day_header_cell.fill = fill_day_header
+        day_header_cell.alignment = align_center
+        current_row += 1
+
+        # --- Cabeceras de la tabla de movimientos ---
+        headers = ["Tipo de Movimiento", "Fecha Específica", "Detalle", "Tercero / Banco", "Valor"]
+        for col_num, header_title in enumerate(headers, 2): # Empezar en columna B
+            cell = ws.cell(row=current_row, column=col_num, value=header_title)
+            cell.font = font_header
+            cell.fill = fill_header
+            cell.border = thin_border
+            cell.alignment = align_center
+        current_row += 1
+        
+        # --- Procesar y escribir movimientos ---
+        total_desglose = 0
+        subtotales = {'Tarjetas': 0, 'Consignaciones': 0, 'Gastos': 0, 'Efectivo': 0}
+        
+        movimientos_map = {
+            'Tarjetas': ('Tarjetas', '[]'),
+            'Consignaciones': ('Consignaciones', '[]'),
+            'Gastos': ('Gastos', '[]'),
+            'Efectivo': ('Efectivo', '[]')
+        }
+
+        for cat_name, (json_key, default_val) in movimientos_map.items():
+            data_list = json.loads(record.get(json_key, default_val))
+            if not data_list: continue
+
+            # Fila de categoría
+            ws.merge_cells(start_row=current_row, start_column=2, end_row=current_row, end_column=6)
+            cat_cell = ws.cell(row=current_row, column=2, value=cat_name.upper())
+            cat_cell.font = font_category
+            cat_cell.fill = fill_category
+            cat_cell.border = thin_border
+            current_row += 1
+
+            for item in data_list:
+                valor = float(item.get('Valor', 0))
+                if valor == 0: continue
+                
+                ws.cell(row=current_row, column=2, value=item.get('Tipo', cat_name.rstrip('s')))
+                ws.cell(row=current_row, column=3, value=item.get('Fecha', fecha_str))
+                ws.cell(row=current_row, column=4, value=item.get('Descripción', 'N/A'))
+                ws.cell(row=current_row, column=5, value=item.get('Tercero', item.get('Banco', item.get('Destino/Tercero (Opcional)', 'N/A'))))
+                valor_cell = ws.cell(row=current_row, column=6, value=valor)
+                valor_cell.number_format = currency_format
+                valor_cell.alignment = align_right
+
+                # Aplicar bordes a la fila de datos
+                for col_idx in range(2, 7):
+                    ws.cell(row=current_row, column=col_idx).border = thin_border
+
+                total_desglose += valor
+                subtotales[cat_name] += valor
+                current_row += 1
+        
+        # --- Bloque de Resumen y Totales del Día ---
+        current_row += 1 # Espacio antes del resumen
+        
+        venta_total_sistema = float(record.get('Venta Total (Sistema)', 0))
+        diferencia = venta_total_sistema - total_desglose
+
+        summary_data = [
+            ("Venta Total (Sistema)", venta_total_sistema),
+            ("Total Tarjetas", subtotales['Tarjetas']),
+            ("Total Consignaciones", subtotales['Consignaciones']),
+            ("Total Gastos", subtotales['Gastos']),
+            ("Total Efectivo (Entregas/Reintegros)", subtotales['Efectivo']),
+            ("TOTAL DESGLOSADO (Suma de Movimientos)", total_desglose),
+            ("DIFERENCIA EN CUADRE", diferencia)
+        ]
+
+        for label, value in summary_data:
+            ws.merge_cells(start_row=current_row, start_column=4, end_row=current_row, end_column=5)
+            label_cell = ws.cell(row=current_row, column=4, value=label)
+            value_cell = ws.cell(row=current_row, column=6, value=value)
+            
+            label_cell.font = font_total_label
+            label_cell.alignment = align_right
+            label_cell.fill = fill_summary
+            label_cell.border = thin_border
+            ws.cell(row=current_row, column=5).border = thin_border # Borde para celda mergeada
+            
+            value_cell.font = font_total_value
+            value_cell.number_format = currency_format
+            value_cell.alignment = align_right
+            value_cell.fill = fill_summary
+            value_cell.border = thin_border
+
+            if "DIFERENCIA" in label:
+                if diferencia == 0:
+                    value_cell.font = font_diff_ok
+                else:
+                    value_cell.font = font_diff_bad
+
+            current_row += 1
+
+        current_row += 2 # Espacio extra entre días
+
     # --- Ajustar Ancho de Columnas ---
-    column_widths = {'A': 12, 'B': 20, 'C': 25, 'D': 35, 'E': 25, 'F': 18}
+    column_widths = {'A': 5, 'B': 22, 'C': 18, 'D': 35, 'E': 25, 'F': 18}
     for col, width in column_widths.items():
         ws.column_dimensions[col].width = width
 
@@ -332,8 +396,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     output.seek(0)
     
     return output.getvalue()
-# --- FIN DE NUEVA FUNCIÓN ---
-
+# --- FIN DE NUEVA FUNCIÓN MEJORADA ---
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
 def initialize_session_state():
@@ -727,4 +790,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
