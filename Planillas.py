@@ -346,7 +346,10 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         # --- Bloque de Resumen y Totales del Día ---
         current_row += 1 # Espacio antes del resumen
         
-        venta_total_sistema = float(record.get('Venta Total (Sistema)', 0))
+        # ***** LÍNEA CORREGIDA *****
+        venta_total_sistema = float(record.get('Venta_Total_Dia', 0))
+        # ***************************
+        
         diferencia = venta_total_sistema - total_desglose
 
         summary_data = [
