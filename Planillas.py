@@ -29,11 +29,17 @@ def connect_to_gsheet():
         registros_ws = sheet.worksheet(st.secrets["google_sheets"]["registros_sheet_name"])
         config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
         consecutivos_ws = sheet.worksheet("Consecutivos")
-        return registros_ws, config_ws, consecutivos_ws
+        
+        # --- NUEVO: CONEXIÓN A LA HOJA DE CONSECUTIVO GLOBAL ---
+        # Se añade la conexión a la nueva hoja que creaste.
+        global_consecutivo_ws = sheet.worksheet("GlobalConsecutivo")
+        # --------------------------------------------------------
+        
+        return registros_ws, config_ws, consecutivos_ws, global_consecutivo_ws
     except Exception as e:
         st.error(f"Error fatal al conectar con Google Sheets: {e}")
-        st.warning("Verifique las credenciales y los nombres de las hojas en los 'secrets' de Streamlit.")
-        return None, None, None
+        st.warning("Verifique las credenciales y los nombres de las hojas (incluyendo 'GlobalConsecutivo') en los 'secrets' de Streamlit.")
+        return None, None, None, None
 
 # --- 3. LÓGICA DE DATOS Y PROCESAMIENTO ---
 def get_app_config(config_ws):
@@ -68,6 +74,8 @@ def get_account_mappings(config_ws):
             if detalle and cuenta:
                 detalle_str = str(detalle).strip() # Se usa .strip() para consistencia
                 cuenta_str = str(cuenta)
+                # --- CAMBIO SUTIL: TAMBIÉN MAPEAMOS TERCEROS CON SU CUENTA Y NIT ---
+                # Esto es clave para la nueva lógica de pagos en efectivo.
                 if tipo in ["BANCO", "TERCERO"]:
                     mappings[detalle_str] = {
                         'cuenta': cuenta_str,
@@ -104,7 +112,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
-            # CORRECCIÓN: Se convierte a string antes de usar .strip() para manejar tiendas numéricas.
             filtered_records = [r for r in date_filtered_records if str(r.get('Tienda', '')).strip() == selected_store]
 
     except ValueError as e:
@@ -119,7 +126,13 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
     txt_lines = []
     
     for record in filtered_records:
-        consecutivo = record.get('Consecutivo_Asignado', '0')
+        # --- CAMBIO EN CONSECUTIVOS ---
+        # El consecutivo de la tienda ahora se llama consecutivo_referencia.
+        # El consecutivo global del documento se obtiene de la columna 15 (lo guardaremos allí).
+        consecutivo_referencia = record.get('Consecutivo_Asignado', '0')
+        consecutivo_documento = record.get('Consecutivo_Global_Doc', '0')
+        # ---------------------------------
+        
         tienda = str(record.get('Tienda', ''))
         fecha_cuadre = record['Fecha']
         centro_costo = tienda 
@@ -173,41 +186,56 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                     else:
                         descripcion = item.get('Descripción', 'Gasto Varios')
 
+                # --- NUEVA LÓGICA MEJORADA PARA EFECTIVO ---
                 elif tipo_mov == 'EFECTIVO':
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
                     
-                    cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
-
+                    # Si es una entrega de efectivo a un tercero específico...
                     if tipo_especifico == "Efectivo Entregado" and destino_tercero and destino_tercero != "N/A":
                         tercero_info = account_mappings.get(destino_tercero)
                         if tercero_info:
+                            # 1. La cuenta contable es la del TERCERO.
+                            cuenta = tercero_info.get('cuenta', f'ERR_TERCERO_{destino_tercero}')
+                            # 2. El NIT es el del TERCERO.
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', destino_tercero)
                             descripcion = f"Ventas planillas contado Entrega efectivo a {nombre_tercero_desc} - {tienda_descripcion}"
                         else:
+                            # Si no se encuentra el tercero, se usa la cuenta de caja general como antes.
+                            cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
                             descripcion = f"Ventas planillas contado Entrega efectivo a TERCERO_NO_ENCONTRADO({destino_tercero}) - {tienda_descripcion}"
+                    else:
+                        # Para otros movimientos de efectivo (ej. Reintegro), usa la lógica original.
+                        cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
+                # --- FIN DE LA NUEVA LÓGICA ---
 
+                # --- CAMBIO EN LA CONSTRUCCIÓN DE LA LÍNEA ---
+                # Columna 2: Nuevo consecutivo del documento.
+                # Columna 7: Consecutivo de la tienda (referencia).
                 linea = "|".join([
-                    fecha_cuadre, str(consecutivo), str(cuenta), "8",
-                    descripcion, serie_documento, str(consecutivo),
+                    fecha_cuadre, str(consecutivo_documento), str(cuenta), "8",
+                    descripcion, serie_documento, str(consecutivo_referencia),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero_final, "0"
                 ])
+                # ------------------------------------------------
                 txt_lines.append(linea)
 
         # Línea de contrapartida (crédito) para balancear los débitos del día
         if total_debito_dia > 0:
             cuenta_venta = "11050501" # Cuenta de caja general para las ventas
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
+            
+            # --- TAMBIÉN SE AJUSTA LA LÍNEA DE CRÉDITO ---
             linea_credito = "|".join([
-                fecha_cuadre, str(consecutivo), str(cuenta_venta), "8",
-                descripcion_credito, centro_costo, str(consecutivo),
+                fecha_cuadre, str(consecutivo_documento), str(cuenta_venta), "8",
+                descripcion_credito, centro_costo, str(consecutivo_referencia),
                 "0", str(total_debito_dia), centro_costo, "0", "0", "0"
             ])
+            # -------------------------------------------------
             txt_lines.append(linea_credito)
             
     return "\n".join(txt_lines)
-
 # --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE EXCEL ---
 def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     """
@@ -459,6 +487,8 @@ def load_cuadre_data(registros_ws):
         st.error(f"Error al cargar datos. Verifique la hoja 'Registros'. Error: {e}")
         clear_form_state()
 
+# --- NUEVAS FUNCIONES PARA MANEJAR CONSECUTIVOS ---
+
 def get_next_consecutive(consecutivos_ws, tienda):
     """Obtiene el siguiente número consecutivo para una tienda."""
     try:
@@ -470,7 +500,7 @@ def get_next_consecutive(consecutivos_ws, tienda):
             st.warning(f"No se encontró consecutivo para '{tienda}'. Se usará '1000' por defecto.")
             return 1000
     except Exception as e:
-        st.error(f"Error al obtener consecutivo: {e}")
+        st.error(f"Error al obtener consecutivo de tienda: {e}")
         return None
 
 def update_consecutive(consecutivos_ws, tienda, new_consecutive):
@@ -482,7 +512,28 @@ def update_consecutive(consecutivos_ws, tienda, new_consecutive):
         else:
             consecutivos_ws.append_row([tienda, new_consecutive])
     except Exception as e:
-        st.error(f"Error al actualizar consecutivo: {e}")
+        st.error(f"Error al actualizar consecutivo de tienda: {e}")
+
+# --- ESTAS DOS FUNCIONES SON COMPLETAMENTE NUEVAS ---
+def get_next_global_consecutive(global_consecutivo_ws):
+    """Obtiene el siguiente número consecutivo global de la hoja 'GlobalConsecutivo'."""
+    try:
+        # Asumimos que el valor está siempre en la celda B1
+        last_consecutive = int(global_consecutivo_ws.acell('B1').value)
+        return last_consecutive + 1
+    except Exception as e:
+        st.error(f"Error al obtener consecutivo global desde la hoja 'GlobalConsecutivo': {e}")
+        st.warning("Asegúrese que la hoja exista y que la celda B1 contenga un número.")
+        return None
+
+def update_global_consecutive(global_consecutivo_ws, new_consecutive):
+    """Actualiza el último consecutivo global usado en la hoja 'GlobalConsecutivo'."""
+    try:
+        # Asumimos que el valor se actualiza siempre en la celda B1
+        global_consecutivo_ws.update_acell('B1', new_consecutive)
+    except Exception as e:
+        st.error(f"Error al actualizar el consecutivo global: {e}")
+# ----------------------------------------------------
 
 def display_dynamic_list_section(title, key, form_inputs, options_map=None):
     """Función reutilizable para crear secciones del formulario (consignaciones, gastos, etc.)."""
@@ -611,8 +662,13 @@ def display_efectivo_section(terceros_list):
         }
     )
 
-def display_summary_and_save(registros_ws, consecutivos_ws):
+def display_summary_and_save(worksheets):
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
+    
+    # --- CAMBIO: PASAMOS TODAS LAS HOJAS NECESARIAS ---
+    registros_ws, _, consecutivos_ws, global_consecutivo_ws = worksheets
+    # ----------------------------------------------------
+
     with st.container(border=True):
         sub_t = sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)
         sub_c = sum(float(c.get('Valor', 0)) for c in st.session_state.consignaciones)
@@ -642,34 +698,52 @@ def display_summary_and_save(registros_ws, consecutivos_ws):
 
             try:
                 cell = registros_ws.find(id_registro, in_column=1)
-                if cell:
-                    consecutivo_asignado = registros_ws.cell(cell.row, 2).value
-                else:
-                    consecutivo_asignado = get_next_consecutive(consecutivos_ws, tienda)
-                    if consecutivo_asignado is None: return
-                    update_consecutive(consecutivos_ws, tienda, consecutivo_asignado)
                 
+                # --- LÓGICA DE GUARDADO DE CONSECUTIVOS MODIFICADA ---
+                if cell:
+                    # Si el registro ya existe, reutilizamos los consecutivos que ya tenía.
+                    consecutivo_asignado_tienda = registros_ws.cell(cell.row, 2).value
+                    consecutivo_global_doc = registros_ws.cell(cell.row, 15).value # Asumimos que estará en la columna 15
+                else:
+                    # Si es un registro nuevo, generamos ambos consecutivos.
+                    consecutivo_asignado_tienda = get_next_consecutive(consecutivos_ws, tienda)
+                    consecutivo_global_doc = get_next_global_consecutive(global_consecutivo_ws)
+                    
+                    if consecutivo_asignado_tienda is None or consecutivo_global_doc is None:
+                        st.error("No se pudo generar uno de los consecutivos. No se guardará el registro.")
+                        return
+                    
+                    # Actualizamos ambos contadores en Google Sheets
+                    update_consecutive(consecutivos_ws, tienda, consecutivo_asignado_tienda)
+                    update_global_consecutive(global_consecutivo_ws, consecutivo_global_doc)
+                # --------------------------------------------------------
+
+                # --- NUEVA ESTRUCTURA DE LA FILA DE DATOS ---
+                # Se añade el nuevo consecutivo al final para no dañar el orden existente.
                 fila_datos = [
-                    id_registro, consecutivo_asignado, tienda, fecha_str,
+                    id_registro, consecutivo_asignado_tienda, tienda, fecha_str,
                     st.session_state.factura_inicial, st.session_state.factura_final, venta_total,
                     json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
                     json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
-                    diferencia, datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    diferencia, datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                    "", # Columna 14 vacía
+                    consecutivo_global_doc # Columna 15 (O) para el nuevo consecutivo
                 ]
+                # ----------------------------------------------------
 
                 if cell:
                     registros_ws.update(f'A{cell.row}', [fila_datos])
                     st.success(f"✅ Cuadre para {tienda} el {fecha_str} fue **actualizado**!")
                 else:
                     registros_ws.append_row(fila_datos)
-                    st.success(f"✅ Cuadre para {tienda} el {fecha_str} fue **guardado** con el consecutivo **{consecutivo_asignado}**!")
+                    st.success(f"✅ Cuadre para {tienda} el {fecha_str} fue **guardado** con el consecutivo de referencia **{consecutivo_asignado_tienda}** y de documento **{consecutivo_global_doc}**!")
             except Exception as e:
                 st.error(f"Error al guardar los datos en Google Sheets: {e}")
 
 # --- 6. RENDERIZADO DE PÁGINAS PRINCIPALES ---
 def render_form_page(worksheets, config):
     """Renderiza la página del formulario principal."""
-    registros_ws, _, consecutivos_ws = worksheets
+    registros_ws, _, _, _ = worksheets
     tiendas, bancos, terceros = config
     
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
@@ -700,7 +774,7 @@ def render_form_page(worksheets, config):
         display_gastos_section(terceros)
         display_efectivo_section(terceros)
 
-    display_summary_and_save(registros_ws, consecutivos_ws)
+    display_summary_and_save(worksheets)
 
 def render_reports_page(registros_ws, config_ws, tiendas_list):
     """Renderiza la página de generación de reportes."""
@@ -761,7 +835,7 @@ def main():
     worksheets = connect_to_gsheet()
     
     if all(worksheets):
-        registros_ws, config_ws, consecutivos_ws = worksheets
+        registros_ws, config_ws, _, _ = worksheets
         with st.sidebar:
             st.header("Navegación")
             page_selection = st.radio(
