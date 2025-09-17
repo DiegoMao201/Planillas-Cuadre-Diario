@@ -496,197 +496,98 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     # Se eliminó la indentación de Python dentro del string para evitar errores de parseo CSS.
     html_body = f"""
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Resumen Gerencial de Caja</title>
-<style>
+<style type="text/css">
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-body {{
-    margin: 0;
-    padding: 0;
-    background-color: #f8f9fa;
-    font-family: 'Roboto', sans-serif;
-}}
-.email-container {{
-    max-width: 680px;
-    margin: 20px auto;
-    background-color: #ffffff;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 1px solid #dee2e6;
-}}
-.header {{
-    background: linear-gradient(90deg, #023e8a, #0077b6);
-    padding: 32px;
-    text-align: center;
-    color: white;
-}}
-.header h1 {{
-    font-size: 28px;
-    font-weight: 700;
-    margin: 0 0 8px 0;
-}}
-.header .subtitle {{
-    font-size: 16px;
-    font-weight: 400;
-    color: #caf0f8;
-    margin: 0;
-}}
-.date-badge {{
-    background-color: rgba(255, 255, 255, 0.15);
-    color: #ffffff;
-    padding: 8px 18px;
-    border-radius: 20px;
-    font-size: 14px;
-    font-weight: 500;
-    margin-top: 20px;
-    display: inline-block;
-}}
-.content {{
-    padding: 32px;
-}}
-.kpi-card {{
-    background-color: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 10px;
-    padding: 20px;
-    text-align: center;
-}}
-.kpi-card h3 {{
-    color: #495057;
-    font-size: 14px;
-    font-weight: 500;
-    margin: 0 0 8px 0;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-}}
-.kpi-card .amount {{
-    color: #212529;
-    font-size: 32px;
-    font-weight: 700;
-    margin: 0;
-    line-height: 1.2;
-}}
-.details-section h2 {{
-    color: #023e8a;
-    font-size: 20px;
-    font-weight: 700;
-    margin: 0 0 16px 0;
-    padding-bottom: 10px;
-    border-bottom: 2px solid #0077b6;
-}}
-.detail-table {{
-    width: 100%;
-    border-collapse: collapse;
-}}
-.detail-table tr {{
-    border-bottom: 1px solid #e9ecef;
-}}
-.detail-table tr:last-child {{
-    border-bottom: none;
-}}
-.detail-table td {{
-    padding: 16px 4px;
-    font-size: 15px;
-}}
-.detail-label {{
-    color: #6c757d;
-}}
-.detail-value {{
-    color: #212529;
-    font-weight: 500;
-    text-align: right;
-}}
-.detail-value.positive {{ color: #007200; }}
-.detail-value.negative {{ color: #d00000; }}
-.final-balance-card {{
-    background-color: #023e8a;
-    border-radius: 12px;
-    padding: 24px;
-    text-align: center;
-    color: #ffffff;
-}}
-.final-balance-card h3 {{
-    font-size: 16px;
-    font-weight: 500;
-    margin: 0 0 8px 0;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    opacity: 0.8;
-}}
-.final-balance-card .amount {{
-    font-size: 40px;
-    font-weight: 700;
-    margin: 0 0 4px 0;
-}}
-.footer {{
-    padding: 24px;
-    text-align: center;
-    font-size: 12px;
-    color: #6c757d;
-    background-color: #f1f3f5;
-}}
+body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+img {{ -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }}
+body {{ height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f8f9fa; font-family: 'Roboto', sans-serif; }}
 </style>
 </head>
-<body>
-<div class="email-container">
-    <div class="header">
-        <h1>Resumen Gerencial de Caja</h1>
-        <p class="subtitle">{subtitle_text}</p>
-        <div class="date-badge">{report_date_str}</div>
-    </div>
-    <div class="content">
-        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 32px;">
-            <tr>
-                <td width="49%" style="padding-right: 10px;">
-                    <div class="kpi-card">
-                        <h3>📈 Ingresos Totales</h3>
-                        <p class="amount">{format_cop(total_ingresos)}</p>
-                    </div>
-                </td>
-                <td width="49%" style="padding-left: 10px;">
-                    <div class="kpi-card">
-                        <h3>📉 Egresos Totales</h3>
-                        <p class="amount">{format_cop(total_egresos)}</p>
-                    </div>
-                </td>
-            </tr>
-        </table>
-
-        <div class="details-section">
-            <h2>Detalle de Movimientos</h2>
-            <table class="detail-table" role="presentation" border="0" cellpadding="0" cellspacing="0">
-                <tr>
-                    <td class="detail-label">Ventas en Efectivo</td>
-                    <td class="detail-value positive">{format_cop(total_ventas_efectivo)}</td>
-                </tr>
-                <tr>
-                    <td class="detail-label">Ventas con Tarjeta</td>
-                    <td class="detail-value positive">{format_cop(total_ventas_tarjeta)}</td>
-                </tr>
-                <tr>
-                    <td class="detail-label">Gastos Operativos</td>
-                    <td class="detail-value negative">-{format_cop(total_gastos)}</td>
-                </tr>
-                <tr>
-                    <td class="detail-label">Retiros y Consignaciones</td>
-                    <td class="detail-value negative">-{format_cop(total_retiros_y_consignaciones)}</td>
-                </tr>
-            </table>
-        </div>
-
-        <div class="final-balance-card" style="margin-top: 32px;">
-            <h3>Balance Neto del Periodo</h3>
-            <p class="amount">{format_cop(balance_neto)}</p>
-        </div>
-    </div>
-    <div class="footer">
-        <p>Este reporte fue generado automáticamente el {report_time_str}.<br>
-        <strong>Sistema de Gestión Financiera</strong></p>
-    </div>
-</div>
+<body style="margin: 0; padding: 0; background-color: #f8f9fa;">
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr>
+<td bgcolor="#f8f9fa" align="center" style="padding: 20px 0;">
+<table border="0" cellpadding="0" cellspacing="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden;">
+<tr>
+<td align="center" style="background: linear-gradient(90deg, #023e8a, #0077b6); padding: 32px;">
+<h1 style="font-size: 28px; font-weight: 700; margin: 0 0 8px 0; color: #ffffff;">Resumen Gerencial de Caja</h1>
+<p style="font-size: 16px; font-weight: 400; color: #caf0f8; margin: 0;">{subtitle_text}</p>
+<table border="0" cellspacing="0" cellpadding="0" style="margin-top: 20px;">
+<tr>
+<td align="center" style="border-radius: 20px; background-color: rgba(255, 255, 255, 0.15);" bgcolor="rgba(255, 255, 255, 0.15)">
+<a style="font-size: 14px; font-weight: 500; color: #ffffff; text-decoration: none; padding: 8px 18px; border-radius: 20px; display: inline-block;">{report_date_str}</a>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td align="center" style="padding: 32px;">
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr>
+<td align="center" style="padding-bottom: 32px;">
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr>
+<td width="48%" valign="top">
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; text-align: center;">
+<tr><td style="padding: 20px;">
+<h3 style="color: #495057; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.8px;">📈 Ingresos Totales</h3>
+<p style="color: #212529; font-size: 32px; font-weight: 700; margin: 0; line-height: 1.2;">{format_cop(total_ingresos)}</p>
+</td></tr>
+</table>
+</td>
+<td width="4%"></td>
+<td width="48%" valign="top">
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; text-align: center;">
+<tr><td style="padding: 20px;">
+<h3 style="color: #495057; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.8px;">📉 Egresos Totales</h3>
+<p style="color: #212529; font-size: 32px; font-weight: 700; margin: 0; line-height: 1.2;">{format_cop(total_egresos)}</p>
+</td></tr>
+</table>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td align="left">
+<h2 style="color: #023e8a; font-size: 20px; font-weight: 700; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
+<table border="0" cellpadding="0" cellspacing="0" width="100%">
+<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Ventas en Efectivo</td><td align="right" style="color: #007200; font-weight: 500;">{format_cop(total_ventas_efectivo)}</td></tr>
+<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Ventas con Tarjeta</td><td align="right" style="color: #007200; font-weight: 500;">{format_cop(total_ventas_tarjeta)}</td></tr>
+<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Gastos Operativos</td><td align="right" style="color: #d00000; font-weight: 500;">-{format_cop(total_gastos)}</td></tr>
+<tr><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Retiros y Consignaciones</td><td align="right" style="color: #d00000; font-weight: 500;">-{format_cop(total_retiros_y_consignaciones)}</td></tr>
+</table>
+</td>
+</tr>
+<tr>
+<td align="center" style="padding-top: 32px;">
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #023e8a; border-radius: 12px; text-align: center; color: #ffffff;">
+<tr><td style="padding: 24px;">
+<h3 style="font-size: 16px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px; opacity: 0.8;">Balance Neto del Periodo</h3>
+<p style="font-size: 40px; font-weight: 700; margin: 0 0 4px 0;">{format_cop(balance_neto)}</p>
+</td></tr>
+</table>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+<tr>
+<td bgcolor="#f1f3f5" align="center" style="padding: 24px;">
+<p style="font-size: 12px; color: #6c757d; margin: 0;">Este reporte fue generado automáticamente el {report_time_str}.<br><strong style="color: #495057;">Sistema de Gestión Financiera</strong></p>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
 </body>
 </html>
 """
