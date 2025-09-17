@@ -23,7 +23,7 @@ para cada monto de efectivo recaudado.
 def connect_to_gsheet():
     """
     Establece conexión con Google Sheets usando las credenciales de st.secrets.
-    Retorna los objetos de las hojas de configuración y de registros.
+    Retorna los objetos de las hojas de configuración, registros de recibos y el consecutivo global.
     """
     try:
         creds_json = dict(st.secrets["google_credentials"])
@@ -32,15 +32,17 @@ def connect_to_gsheet():
         client = gspread.authorize(creds)
         spreadsheet_name = st.secrets["google_sheets"]["spreadsheet_name"]
         sheet = client.open(spreadsheet_name)
-        config_sheet_name = st.secrets["google_sheets"]["config_sheet_name"]
-        registros_recibos_sheet_name = st.secrets["google_sheets"]["registros_recibos_sheet_name"]
-        config_ws = sheet.worksheet(config_sheet_name)
-        registros_recibos_ws = sheet.worksheet(registros_recibos_sheet_name)
-        return config_ws, registros_recibos_ws
+        
+        # Obtenemos las hojas de trabajo
+        config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
+        registros_recibos_ws = sheet.worksheet(st.secrets["google_sheets"]["registros_recibos_sheet_name"])
+        global_consecutivo_ws = sheet.worksheet("GlobalConsecutivo")
+        
+        return config_ws, registros_recibos_ws, global_consecutivo_ws
     except Exception as e:
         st.error(f"Error fatal al conectar con Google Sheets: {e}")
-        st.warning("Verifique las credenciales y el nombre de la hoja 'Configuracion' en los 'secrets' de Streamlit.")
-        return None, None
+        st.warning("Verifique las credenciales y los nombres de las hojas 'Configuracion', 'RegistrosRecibos' y 'GlobalConsecutivo' en los 'secrets' de Streamlit.")
+        return None, None, None
 
 def get_app_config(config_ws):
     """
@@ -63,7 +65,6 @@ def get_app_config(config_ws):
                     'nit': str(d.get('NIT', '')).strip(),
                     'nombre': str(d.get('Nombre Tercero', '')).strip(),
                 }
-
         return bancos, terceros, account_mappings
     except Exception as e:
         st.error(f"Error al cargar la configuración de bancos y terceros: {e}")
@@ -112,13 +113,11 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
 
     return "\n".join(txt_lines)
 
-
 def get_next_global_consecutive(global_consecutivo_ws):
     """
     Obtiene el siguiente número consecutivo global para el documento del ERP.
     """
     try:
-        # Asumiendo que esta hoja y celda (GlobalConsecutivo!B1) existen y están bien configuradas.
         last_consecutive = int(global_consecutivo_ws.acell('B1').value)
         return last_consecutive + 1
     except Exception as e:
@@ -136,7 +135,7 @@ def update_global_consecutive(global_consecutivo_ws, new_consecutive):
         st.error(f"Error al actualizar el consecutivo global: {e}")
 
 # --- LÓGICA PRINCIPAL DE LA PÁGINA ---
-config_ws, registros_recibos_ws = connect_to_gsheet()
+config_ws, registros_recibos_ws, global_consecutivo_ws = connect_to_gsheet()
 bancos, terceros, account_mappings = get_app_config(config_ws)
 opciones_destino = ["-- Seleccionar --"] + bancos + terceros
 
@@ -254,12 +253,8 @@ else:
                         
                         # --- Guardar en Google Sheets (nueva funcionalidad) ---
                         try:
-                            # Conectar a la hoja 'GlobalConsecutivo' para obtener el número de documento
-                            if 'global_consecutivo_ws' not in st.session_state:
-                                sheet = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["google_credentials"]), ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]))
-                                st.session_state.global_consecutivo_ws = sheet.open(st.secrets["google_sheets"]["spreadsheet_name"]).worksheet("GlobalConsecutivo")
-                            
-                            global_consecutive = get_next_global_consecutive(st.session_state.global_consecutivo_ws)
+                            # Obtener el consecutivo global para el documento del ERP
+                            global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
                             if global_consecutive is None:
                                 st.error("No se pudo obtener el consecutivo global. No se puede guardar.")
                                 return
@@ -281,7 +276,7 @@ else:
                                 ])
                             
                             registros_recibos_ws.append_rows(registros_data, value_input_option='USER_ENTERED')
-                            update_global_consecutive(st.session_state.global_consecutivo_ws, global_consecutive)
+                            update_global_consecutive(global_consecutivo_ws, global_consecutive)
                             st.success("✅ Datos guardados en Google Sheets.")
 
                             # Botón de descarga para el archivo TXT
