@@ -10,10 +10,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import hashlib
-import yagmail  # <--- NUEVO: Para enviar correos
-import smtplib  # <--- NUEVO: Para manejar errores de SMTP
+import yagmail
+import smtplib
 
-# --- NUEVA FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
+# --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
     """
     Muestra un formulario de login y retorna True si la contraseña es correcta.
@@ -65,10 +65,8 @@ def connect_to_gsheet():
         config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
         consecutivos_ws = sheet.worksheet("Consecutivos")
         
-        # --- NUEVO: CONEXIÓN A LA HOJA DE CONSECUTIVO GLOBAL ---
-        # Se añade la conexión a la nueva hoja que creaste.
+        # CONEXIÓN A LA HOJA DE CONSECUTIVO GLOBAL
         global_consecutivo_ws = sheet.worksheet("GlobalConsecutivo")
-        # --------------------------------------------------------
         
         return registros_ws, config_ws, consecutivos_ws, global_consecutivo_ws
     except Exception as e:
@@ -80,8 +78,7 @@ def connect_to_gsheet():
 def get_app_config(config_ws):
     """
     Carga la configuración esencial (tiendas, bancos, terceros) desde la hoja 'Configuracion'.
-    CORRECCIÓN: Se usa .strip() para eliminar espacios en blanco al inicio/final que pueden
-    causar problemas en los filtros. También se asegura de ignorar filas vacías.
+    Usa .strip() para eliminar espacios en blanco y asegura ignorar filas vacías.
     """
     try:
         config_data = config_ws.get_all_records()
@@ -96,7 +93,6 @@ def get_app_config(config_ws):
 def get_account_mappings(config_ws):
     """
     Crea un diccionario de mapeo de cuentas a partir de la hoja 'Configuracion'.
-    La clave del diccionario es el valor de la columna 'Detalle'.
     """
     try:
         records = config_ws.get_all_records()
@@ -107,10 +103,8 @@ def get_account_mappings(config_ws):
             cuenta = record.get("Cuenta Contable")
 
             if detalle and cuenta:
-                detalle_str = str(detalle).strip() # Se usa .strip() para consistencia
+                detalle_str = str(detalle).strip()
                 cuenta_str = str(cuenta)
-                # --- CAMBIO SUTIL: TAMBIÉN MAPEAMOS TERCEROS CON SU CUENTA Y NIT ---
-                # Esto es clave para la nueva lógica de pagos en efectivo.
                 if tipo in ["BANCO", "TERCERO"]:
                     mappings[detalle_str] = {
                         'cuenta': cuenta_str,
@@ -138,12 +132,10 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
         return None
 
     try:
-        # 1. Filtrado por fecha
         date_filtered_records = [
             r for r in all_records
             if start_date <= datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y').date() <= end_date
         ]
-        # 2. Filtrado por tienda
         if selected_store == "Todas las Tiendas":
             filtered_records = date_filtered_records
         else:
@@ -161,12 +153,8 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
     txt_lines = []
     
     for record in filtered_records:
-        # --- CAMBIO EN CONSECUTIVOS ---
-        # El consecutivo de la tienda ahora se llama consecutivo_referencia.
-        # El consecutivo global del documento se obtiene de la columna 15 (lo guardaremos allí).
         consecutivo_referencia = record.get('Consecutivo_Asignado', '0')
         consecutivo_documento = record.get('Consecutivo_Global_Doc', '0')
-        # ---------------------------------
         
         tienda = str(record.get('Tienda', ''))
         fecha_cuadre = record['Fecha']
@@ -187,7 +175,6 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                 if valor == 0: continue
                 total_debito_dia += valor
 
-                # --- Lógica para cada línea del TXT ---
                 cuenta = ""
                 nit_tercero = "0"
                 nombre_tercero_final = "0" 
@@ -206,84 +193,65 @@ def generate_txt_file(registros_ws, config_ws, start_date, end_date, selected_st
                     fecha_consignacion = item.get('Fecha', '')
                     descripcion = f"Ventas planillas contado consignacion {fecha_consignacion} - {tienda_descripcion}"
 
-                # --- CORRECCIÓN EN LA LÓGICA DE GASTOS ---
-                # Se reestructura esta sección para asignar la cuenta contable correcta.
                 elif tipo_mov == 'GASTO':
                     gasto_tercero = item.get('Tercero')
                     
-                    # Primero, se verifica si el gasto se asignó a un tercero específico.
                     if gasto_tercero and gasto_tercero != "N/A":
                         tercero_info = account_mappings.get(gasto_tercero)
                         if tercero_info:
-                            # SI SE ENCUENTRA EL TERCERO: Se usa su cuenta contable y su NIT.
                             cuenta = tercero_info.get('cuenta', f'ERR_TERCERO_{gasto_tercero}')
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', gasto_tercero)
                             descripcion = f"{item.get('Descripción', 'Gasto')} - {nombre_tercero_desc}"
                         else:
-                            # SI NO SE ENCUENTRA: Se usa la cuenta de gasto general y se notifica en la descripción.
                             cuenta = account_mappings.get('Reintegro Caja Menor', {}).get('cuenta', 'ERR_GASTO')
                             descripcion = f"{item.get('Descripción', 'Gasto')} (Tercero {gasto_tercero} no encontrado)"
                     else:
-                        # SI NO HAY TERCERO: Se usa la cuenta de gasto general (Reintegro Caja Menor).
                         cuenta = account_mappings.get('Reintegro Caja Menor', {}).get('cuenta', 'ERR_GASTO')
                         descripcion = item.get('Descripción', 'Gasto Varios')
-                # --- FIN DE LA CORRECCIÓN ---
 
                 elif tipo_mov == 'EFECTIVO':
                     tipo_especifico = item.get('Tipo', 'Efectivo Entregado')
                     destino_tercero = item.get('Destino/Tercero (Opcional)')
                     
-                    # Si es una entrega de efectivo a un tercero específico...
                     if tipo_especifico == "Efectivo Entregado" and destino_tercero and destino_tercero != "N/A":
                         tercero_info = account_mappings.get(destino_tercero)
                         if tercero_info:
-                            # 1. La cuenta contable es la del TERCERO.
                             cuenta = tercero_info.get('cuenta', f'ERR_TERCERO_{destino_tercero}')
-                            # 2. El NIT es el del TERCERO.
                             nit_tercero = tercero_info.get('nit', '0')
                             nombre_tercero_desc = tercero_info.get('nombre', destino_tercero)
                             descripcion = f"Ventas planillas contado Entrega efectivo a {nombre_tercero_desc} - {tienda_descripcion}"
                         else:
-                            # Si no se encuentra el tercero, se usa la cuenta de caja general como antes.
                             cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
                             descripcion = f"Ventas planillas contado Entrega efectivo a TERCERO_NO_ENCONTRADO({destino_tercero}) - {tienda_descripcion}"
                     else:
-                        # Para otros movimientos de efectivo (ej. Reintegro), usa la lógica original.
                         cuenta = account_mappings.get(tipo_especifico, {}).get('cuenta', f'ERR_{tipo_especifico}')
 
-                # --- CAMBIO EN LA CONSTRUCCIÓN DE LA LÍNEA ---
-                # Columna 2: Nuevo consecutivo del documento.
-                # Columna 7: Consecutivo de la tienda (referencia).
                 linea = "|".join([
                     fecha_cuadre, str(consecutivo_documento), str(cuenta), "8",
                     descripcion, serie_documento, str(consecutivo_referencia),
                     str(valor), "0", centro_costo, nit_tercero, nombre_tercero_final, "0"
                 ])
-                # ------------------------------------------------
                 txt_lines.append(linea)
 
-        # Línea de contrapartida (crédito) para balancear los débitos del día
+        # Línea de contrapartida (crédito)
         if total_debito_dia > 0:
-            cuenta_venta = "11050501" # Cuenta de caja general para las ventas
+            cuenta_venta = "11050501"
             descripcion_credito = f"Ventas planillas contado {tienda_descripcion}"
             
-            # --- TAMBIÉN SE AJUSTA LA LÍNEA DE CRÉDITO ---
             linea_credito = "|".join([
                 fecha_cuadre, str(consecutivo_documento), str(cuenta_venta), "8",
                 descripcion_credito, centro_costo, str(consecutivo_referencia),
                 "0", str(total_debito_dia), centro_costo, "0", "0", "0"
             ])
-            # -------------------------------------------------
             txt_lines.append(linea_credito)
             
     return "\n".join(txt_lines)
 
-# --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE EXCEL ---
+# --- GENERADOR DE EXCEL ---
 def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     """
     Genera un archivo Excel profesional y detallado para la revisión del cuadre de caja.
-    Agrupa por día, totaliza categorías y resalta diferencias.
     """
     st.info("Generando reporte Excel profesional... Esto puede tardar unos segundos.")
 
@@ -305,7 +273,6 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         st.warning("No se encontraron registros para generar el reporte Excel.")
         return None
     
-    # Ordenar por fecha y luego por tienda
     filtered_records.sort(key=lambda r: (datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y'), r.get('Tienda', '')))
 
     output = io.BytesIO()
@@ -313,7 +280,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     ws = workbook.active
     ws.title = "Reporte Cuadre de Caja"
 
-    # --- Definición de Estilos ---
+    # Estilos
     font_title = Font(name='Calibri', size=18, bold=True, color="FFFFFF")
     fill_title = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
     font_header = Font(name='Calibri', size=11, bold=True, color="FFFFFF")
@@ -329,11 +296,10 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     font_diff_bad = Font(name='Calibri', size=12, bold=True, color="C00000")
     align_center = Alignment(horizontal='center', vertical='center')
     align_right = Alignment(horizontal='right', vertical='center')
-    align_left = Alignment(horizontal='left', vertical='center')
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     currency_format = '$ #,##0'
 
-    # --- Título Principal ---
+    # Título Principal
     ws.merge_cells('A1:F2')
     title_cell = ws['A1']
     title_cell.value = f"REPORTE DE CUADRE DIARIO - {selected_store.upper()}"
@@ -348,12 +314,12 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     
     current_row = 5
 
-    # --- Iterar sobre cada registro (día/tienda) ---
+    # Iterar sobre cada registro
     for record in filtered_records:
         fecha_str = record.get('Fecha', 'N/A')
         tienda = record.get('Tienda', 'N/A')
         
-        # --- Cabecera del Día ---
+        # Cabecera del Día
         ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
         day_header_cell = ws.cell(row=current_row, column=1, value=f"Resumen del Día: {fecha_str} - Tienda: {tienda}")
         day_header_cell.font = font_day_header
@@ -361,9 +327,9 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
         day_header_cell.alignment = align_center
         current_row += 1
 
-        # --- Cabeceras de la tabla de movimientos ---
+        # Cabeceras de la tabla
         headers = ["Tipo de Movimiento", "Fecha Específica", "Detalle", "Tercero / Banco", "Valor"]
-        for col_num, header_title in enumerate(headers, 2): # Empezar en columna B
+        for col_num, header_title in enumerate(headers, 2):
             cell = ws.cell(row=current_row, column=col_num, value=header_title)
             cell.font = font_header
             cell.fill = fill_header
@@ -371,7 +337,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
             cell.alignment = align_center
         current_row += 1
         
-        # --- Procesar y escribir movimientos ---
+        # Procesar movimientos
         total_desglose = 0
         subtotales = {'Tarjetas': 0, 'Consignaciones': 0, 'Gastos': 0, 'Efectivo': 0}
         
@@ -386,7 +352,6 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
             data_list = json.loads(record.get(json_key, default_val))
             if not data_list: continue
 
-            # Fila de categoría
             ws.merge_cells(start_row=current_row, start_column=2, end_row=current_row, end_column=6)
             cat_cell = ws.cell(row=current_row, column=2, value=cat_name.upper())
             cat_cell.font = font_category
@@ -406,7 +371,6 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
                 valor_cell.number_format = currency_format
                 valor_cell.alignment = align_right
 
-                # Aplicar bordes a la fila de datos
                 for col_idx in range(2, 7):
                     ws.cell(row=current_row, column=col_idx).border = thin_border
 
@@ -414,13 +378,10 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
                 subtotales[cat_name] += valor
                 current_row += 1
         
-        # --- Bloque de Resumen y Totales del Día ---
-        current_row += 1 # Espacio antes del resumen
+        # Bloque de Resumen
+        current_row += 1
         
-        # ***** LÍNEA CORREGIDA *****
         venta_total_sistema = float(record.get('Venta_Total_Dia', 0))
-        # ***************************
-        
         diferencia = venta_total_sistema - total_desglose
 
         summary_data = [
@@ -442,7 +403,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
             label_cell.alignment = align_right
             label_cell.fill = fill_summary
             label_cell.border = thin_border
-            ws.cell(row=current_row, column=5).border = thin_border # Borde para celda mergeada
+            ws.cell(row=current_row, column=5).border = thin_border
             
             value_cell.font = font_total_value
             value_cell.number_format = currency_format
@@ -458,24 +419,22 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
 
             current_row += 1
 
-        current_row += 2 # Espacio extra entre días
+        current_row += 2
 
-    # --- Ajustar Ancho de Columnas ---
+    # Ajustar Ancho de Columnas
     column_widths = {'A': 5, 'B': 22, 'C': 18, 'D': 35, 'E': 25, 'F': 18}
     for col, width in column_widths.items():
         ws.column_dimensions[col].width = width
 
-    # --- Guardar en Buffer ---
     workbook.save(output)
     output.seek(0)
     
     return output.getvalue()
-# --- FIN DE NUEVA FUNCIÓN MEJORADA ---
 
-# --- INICIO DE NUEVAS FUNCIONES PARA EL CORREO GERENCIAL ---
+# --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE CORREO GERENCIAL ---
 def generate_summary_email_body(records, start_date, end_date, selected_store):
     """
-    Genera el cuerpo HTML para el correo de resumen gerencial.
+    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
     """
     records_by_store = {}
     for record in records:
@@ -485,7 +444,84 @@ def generate_summary_email_body(records, start_date, end_date, selected_store):
         records_by_store[store].append(record)
 
     sorted_stores = sorted(records_by_store.keys())
+    
+    # --- CÁLCULO DE TOTALES ---
+    grand_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
+    store_cards_html = ""
 
+    for store_name in sorted_stores:
+        store_records = records_by_store[store_name]
+        store_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
+        
+        for record in store_records:
+            store_totals['venta_total'] += float(record.get('Venta_Total_Dia', 0))
+            store_totals['diferencia'] += float(record.get('Diferencia', 0))
+            store_totals['tarjetas'] += sum(float(t.get('Valor', 0)) for t in json.loads(record.get('Tarjetas', '[]')))
+            store_totals['consignaciones'] += sum(float(c.get('Valor', 0)) for c in json.loads(record.get('Consignaciones', '[]')))
+            store_totals['gastos'] += sum(float(g.get('Valor', 0)) for g in json.loads(record.get('Gastos', '[]')))
+            store_totals['efectivo'] += sum(float(e.get('Valor', 0)) for e in json.loads(record.get('Efectivo', '[]')))
+        
+        for key in grand_totals:
+            grand_totals[key] += store_totals[key]
+
+        diferencia_color = "#27ae60" if store_totals['diferencia'] == 0 else "#c0392b"
+        diferencia_icon = "" if store_totals['diferencia'] == 0 else "⚠️ "
+
+        store_cards_html += f"""
+        <div class="card">
+            <div class="card-header">
+                <h2>{store_name}</h2>
+            </div>
+            <div class="card-body">
+                <div class="highlight-section">
+                    <p class="highlight-label">Venta Total (Sistema)</p>
+                    <p class="highlight-value">${store_totals['venta_total']:,.0f}</p>
+                </div>
+                <table class="details-table">
+                    <tr><td>Total Tarjetas</td><td class="amount">${store_totals['tarjetas']:,.0f}</td></tr>
+                    <tr><td>Total Consignaciones</td><td class="amount">${store_totals['consignaciones']:,.0f}</td></tr>
+                    <tr><td>Total Gastos</td><td class="amount">${store_totals['gastos']:,.0f}</td></tr>
+                    <tr><td>Total Movimientos de Efectivo</td><td class="amount">${store_totals['efectivo']:,.0f}</td></tr>
+                </table>
+                <div class="summary-section" style="background-color: {'#e8f8f5' if store_totals['diferencia'] == 0 else '#fdedec'};">
+                    <p class="summary-label">{diferencia_icon}Diferencia en Cuadre</p>
+                    <p class="summary-value" style="color: {diferencia_color};">${store_totals['diferencia']:,.0f}</p>
+                </div>
+            </div>
+        </div>
+        """
+
+    # --- CARD DE TOTAL CONSOLIDADO (SI APLICA) ---
+    consolidated_card_html = ""
+    if selected_store == "Todas las Tiendas" and len(sorted_stores) > 1:
+        diferencia_total_color = "#27ae60" if grand_totals['diferencia'] == 0 else "#c0392b"
+        diferencia_total_icon = "" if grand_totals['diferencia'] == 0 else "⚠️ "
+        
+        consolidated_card_html = f"""
+        <div class="card" style="border-top: 5px solid #0056b3;">
+            <div class="card-header">
+                <h2>Resumen General Consolidado</h2>
+            </div>
+            <div class="card-body">
+                <div class="highlight-section">
+                    <p class="highlight-label">Venta Total Consolidada</p>
+                    <p class="highlight-value">${grand_totals['venta_total']:,.0f}</p>
+                </div>
+                <table class="details-table">
+                    <tr><td>Total Tarjetas</td><td class="amount">${grand_totals['tarjetas']:,.0f}</td></tr>
+                    <tr><td>Total Consignaciones</td><td class="amount">${grand_totals['consignaciones']:,.0f}</td></tr>
+                    <tr><td>Total Gastos</td><td class="amount">${grand_totals['gastos']:,.0f}</td></tr>
+                    <tr><td>Total Movimientos de Efectivo</td><td class="amount">${grand_totals['efectivo']:,.0f}</td></tr>
+                </table>
+                <div class="summary-section" style="background-color: {'#e8f8f5' if grand_totals['diferencia'] == 0 else '#fdedec'};">
+                    <p class="summary-label">{diferencia_total_icon}Diferencia Total en Cuadres</p>
+                    <p class="summary-value" style="color: {diferencia_total_color};">${grand_totals['diferencia']:,.0f}</p>
+                </div>
+            </div>
+        </div>
+        """
+    
+    # --- ESTRUCTURA HTML COMPLETA ---
     html_body = f"""
     <!doctype html>
     <html>
@@ -493,112 +529,44 @@ def generate_summary_email_body(records, start_date, end_date, selected_store):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }}
-            .container {{ max-width: 800px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); overflow: hidden; }}
-            .header {{ background-color: #003865; color: #ffffff; padding: 20px; text-align: center; }}
-            .header h1 {{ margin: 0; font-size: 24px; }}
-            .header p {{ margin: 5px 0 0; font-size: 16px; }}
-            .store-section {{ margin: 20px; padding: 20px; border: 1px solid #dddddd; border-radius: 8px; }}
-            .store-title {{ color: #0058A7; font-size: 22px; margin-bottom: 15px; border-bottom: 2px solid #0058A7; padding-bottom: 10px; }}
-            .summary-table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
-            .summary-table th, .summary-table td {{ padding: 12px; text-align: left; border-bottom: 1px solid #eeeeee; }}
-            .summary-table th {{ background-color: #f8f8f8; font-weight: 600; color: #333; }}
-            .summary-table .label {{ font-weight: bold; color: #555; }}
-            .summary-table .value {{ text-align: right; font-family: 'Courier New', Courier, monospace; font-size: 16px; }}
-            .total-row td {{ font-weight: bold; background-color: #f2f2f2; font-size: 18px; color: #003865; }}
-            .cash-detail {{ margin-top: 15px; padding-left: 20px; border-left: 3px solid #FFC300; }}
-            .cash-detail p {{ margin: 5px 0; }}
-            .footer {{ background-color: #333333; color: #cccccc; text-align: center; padding: 15px; font-size: 12px; }}
+            body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; }}
+            .email-container {{ max-width: 600px; margin: 20px auto; background-color: #ffffff; }}
+            .header {{ background-color: #004a99; color: #ffffff; padding: 25px; text-align: center; border-radius: 8px 8px 0 0; }}
+            .header h1 {{ margin: 0; font-size: 24px; font-weight: 600; }}
+            .header p {{ margin: 5px 0 0; font-size: 16px; opacity: 0.9; }}
+            .content {{ padding: 20px; }}
+            .card {{ border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05); }}
+            .card-header {{ background-color: #f9f9f9; padding: 15px; border-bottom: 1px solid #e0e0e0; }}
+            .card-header h2 {{ margin: 0; font-size: 20px; color: #333; }}
+            .card-body {{ padding: 20px; }}
+            .highlight-section {{ text-align: center; padding: 15px; background-color: #fdf2e9; border-radius: 6px; margin-bottom: 20px; }}
+            .highlight-label {{ margin: 0 0 5px 0; font-size: 14px; color: #666; }}
+            .highlight-value {{ margin: 0; font-size: 32px; font-weight: 700; color: #d9534f; }}
+            .details-table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+            .details-table td {{ padding: 10px; border-bottom: 1px solid #f0f0f0; font-size: 16px; color: #555; }}
+            .details-table tr:last-child td {{ border-bottom: none; }}
+            .details-table .amount {{ text-align: right; font-weight: 600; font-family: 'Courier New', Courier, monospace; }}
+            .summary-section {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-radius: 6px; }}
+            .summary-label {{ margin: 0; font-size: 16px; font-weight: 600; color: #333; }}
+            .summary-value {{ margin: 0; font-size: 22px; font-weight: 700; }}
+            .footer {{ background-color: #333333; color: #cccccc; text-align: center; padding: 20px; font-size: 12px; border-radius: 0 0 8px 8px; }}
+            .footer p {{ margin: 0; }}
         </style>
     </head>
     <body>
-        <div class="container">
+        <div class="email-container">
             <div class="header">
-                <h1>Resumen Gerencial de Cuadre de Caja</h1>
+                <h1>Resumen Gerencial de Cuadre</h1>
                 <p>Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}</p>
                 <p><strong>Tienda(s):</strong> {selected_store}</p>
             </div>
-    """
-
-    grand_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
-
-    for store_name in sorted_stores:
-        store_records = records_by_store[store_name]
-        store_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
-        cash_details_html = ""
-
-        for record in store_records:
-            store_totals['venta_total'] += float(record.get('Venta_Total_Dia', 0))
-            store_totals['diferencia'] += float(record.get('Diferencia', 0))
-
-            tarjetas = json.loads(record.get('Tarjetas', '[]'))
-            consignaciones = json.loads(record.get('Consignaciones', '[]'))
-            gastos = json.loads(record.get('Gastos', '[]'))
-            efectivo_movs = json.loads(record.get('Efectivo', '[]'))
-
-            sub_t = sum(float(t.get('Valor', 0)) for t in tarjetas)
-            sub_c = sum(float(c.get('Valor', 0)) for c in consignaciones)
-            sub_g = sum(float(g.get('Valor', 0)) for g in gastos)
-            sub_e = sum(float(e.get('Valor', 0)) for e in efectivo_movs)
-
-            store_totals['tarjetas'] += sub_t
-            store_totals['consignaciones'] += sub_c
-            store_totals['gastos'] += sub_g
-            store_totals['efectivo'] += sub_e
-
-            for mov in efectivo_movs:
-                valor = float(mov.get('Valor', 0))
-                destino = mov.get('Destino/Tercero (Opcional)', 'N/A')
-                tipo = mov.get('Tipo', 'Movimiento de Efectivo')
-                if valor > 0:
-                    if destino != "N/A":
-                        cash_details_html += f"<p> • Se entregaron <strong>${valor:,.0f}</strong> a <strong>{destino}</strong> ({tipo}).</p>"
-                    else:
-                        cash_details_html += f"<p> • Salida de efectivo ({tipo}) por <strong>${valor:,.0f}</strong> a caja general/transportadora.</p>"
-        
-        for key in grand_totals:
-            grand_totals[key] += store_totals[key]
-
-        html_body += f"""
-        <div class="store-section">
-            <h2 class="store-title">{store_name}</h2>
-            <table class="summary-table">
-                <tr><td class="label">Venta Total (Sistema)</td><td class="value">${store_totals['venta_total']:,.0f}</td></tr>
-                <tr><td class="label">Total Tarjetas</td><td class="value">${store_totals['tarjetas']:,.0f}</td></tr>
-                <tr><td class="label">Total Consignaciones</td><td class="value">${store_totals['consignaciones']:,.0f}</td></tr>
-                <tr><td class="label">Total Gastos</td><td class="value">${store_totals['gastos']:,.0f}</td></tr>
-                <tr><td class="label">Total Movimientos de Efectivo</td><td class="value">${store_totals['efectivo']:,.0f}</td></tr>
-                <tr class="total-row"><td class="label">Diferencia en Cuadre</td><td class="value" style="color: {'red' if store_totals['diferencia'] != 0 else 'green'};">${store_totals['diferencia']:,.0f}</td></tr>
-            </table>
-            """
-        if cash_details_html:
-            html_body += f"""
-            <div class="cash-detail">
-                <h4>Detalle del Efectivo:</h4>
-                {cash_details_html}
+            <div class="content">
+                {store_cards_html}
+                {consolidated_card_html}
             </div>
-            """
-        html_body += "</div>"
-
-    if selected_store == "Todas las Tiendas" and len(sorted_stores) > 1:
-        html_body += f"""
-        <div class="store-section" style="background-color: #e6f7ff;">
-            <h2 class="store-title" style="color: #003865; border-color: #003865;">Resumen General Consolidado</h2>
-            <table class="summary-table">
-                <tr><td class="label">Venta Total (Sistema)</td><td class="value">${grand_totals['venta_total']:,.0f}</td></tr>
-                <tr><td class="label">Total Tarjetas</td><td class="value">${grand_totals['tarjetas']:,.0f}</td></tr>
-                <tr><td class="label">Total Consignaciones</td><td class="value">${grand_totals['consignaciones']:,.0f}</td></tr>
-                <tr><td class="label">Total Gastos</td><td class="value">${grand_totals['gastos']:,.0f}</td></tr>
-                <tr><td class="label">Total Movimientos de Efectivo</td><td class="value">${grand_totals['efectivo']:,.0f}</td></tr>
-                <tr class="total-row"><td class="label">Diferencia Total en Cuadres</td><td class="value" style="color: {'red' if grand_totals['diferencia'] != 0 else 'green'};">${grand_totals['diferencia']:,.0f}</td></tr>
-            </table>
-        </div>
-        """
-
-    html_body += """
             <div class="footer">
                 <p>Este es un correo generado automáticamente por el Sistema de Cuadre Diario de Caja.</p>
-                <p>&copy; 2025 - Todos los derechos reservados.</p>
+                <p>&copy; {datetime.now().year} - Todos los derechos reservados.</p>
             </div>
         </div>
     </body>
@@ -654,7 +622,7 @@ def send_summary_email(registros_ws, start_date, end_date, selected_store, recip
     except Exception as e:
         st.error(f"Ocurrió un error inesperado al enviar el correo: {e}")
 
-# --- FIN DE NUEVAS FUNCIONES PARA EL CORREO ---
+# --- FIN DE FUNCIONES PARA EL CORREO ---
 
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
@@ -663,7 +631,7 @@ def initialize_session_state():
     defaults = {
         'page': 'Formulario', 'venta_total_dia': 0.0, 'factura_inicial': "", 'factura_final': "",
         'tarjetas': [], 'consignaciones': [], 'gastos': [], 'efectivo': [],
-        'authenticated': False # <--- MODIFICADO: Se añade el estado de autenticación
+        'authenticated': False
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -673,9 +641,8 @@ def clear_form_state():
     """Limpia el formulario, conservando la tienda, fecha y estado de autenticación."""
     tienda = st.session_state.get('tienda_seleccionada', None)
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
-    auth_status = st.session_state.get('authenticated', False) # <--- NUEVO: Se guarda el estado de auth
+    auth_status = st.session_state.get('authenticated', False)
     
-    # MODIFICADO: Se añade 'authenticated' a las claves que no se deben borrar
     keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada', 'authenticated']
     for key in list(st.session_state.keys()):
         if key not in keys_to_keep:
@@ -684,7 +651,7 @@ def clear_form_state():
     initialize_session_state()
     st.session_state.tienda_seleccionada = tienda
     st.session_state.fecha_seleccionada = fecha
-    st.session_state.authenticated = auth_status # <--- NUEVO: Se restaura el estado de auth
+    st.session_state.authenticated = auth_status
 
 # --- 5. COMPONENTES DE LA INTERFAZ DE USUARIO ---
 def format_currency(num):
@@ -719,7 +686,7 @@ def load_cuadre_data(registros_ws):
         st.error(f"Error al cargar datos. Verifique la hoja 'Registros'. Error: {e}")
         clear_form_state()
 
-# --- NUEVAS FUNCIONES PARA MANEJAR CONSECUTIVOS ---
+# --- FUNCIONES PARA MANEJAR CONSECUTIVOS ---
 
 def get_next_consecutive(consecutivos_ws, tienda):
     """Obtiene el siguiente número consecutivo para una tienda."""
@@ -746,11 +713,9 @@ def update_consecutive(consecutivos_ws, tienda, new_consecutive):
     except Exception as e:
         st.error(f"Error al actualizar consecutivo de tienda: {e}")
 
-# --- ESTAS DOS FUNCIONES SON COMPLETAMENTE NUEVAS ---
 def get_next_global_consecutive(global_consecutivo_ws):
-    """Obtiene el siguiente número consecutivo global de la hoja 'GlobalConsecutivo'."""
+    """Obtiene el siguiente número consecutivo global."""
     try:
-        # Asumimos que el valor está siempre en la celda B1
         last_consecutive = int(global_consecutivo_ws.acell('B1').value)
         return last_consecutive + 1
     except Exception as e:
@@ -759,16 +724,14 @@ def get_next_global_consecutive(global_consecutivo_ws):
         return None
 
 def update_global_consecutive(global_consecutivo_ws, new_consecutive):
-    """Actualiza el último consecutivo global usado en la hoja 'GlobalConsecutivo'."""
+    """Actualiza el último consecutivo global usado."""
     try:
-        # Asumimos que el valor se actualiza siempre en la celda B1
         global_consecutivo_ws.update_acell('B1', new_consecutive)
     except Exception as e:
         st.error(f"Error al actualizar el consecutivo global: {e}")
-# ----------------------------------------------------
 
 def display_dynamic_list_section(title, key, form_inputs, options_map=None):
-    """Función reutilizable para crear secciones del formulario (consignaciones, gastos, etc.)."""
+    """Función reutilizable para crear secciones del formulario."""
     if options_map is None: options_map = {}
 
     with st.expander(f"**{title}**", expanded=True):
@@ -821,7 +784,7 @@ def display_dynamic_list_section(title, key, form_inputs, options_map=None):
         st.metric(f"Subtotal {title.split(' ')[1]}", format_currency(subtotal))
 
 def display_tarjetas_section():
-    """Muestra la sección para agregar y editar pagos con tarjeta, incluyendo fecha."""
+    """Muestra la sección para agregar y editar pagos con tarjeta."""
     with st.expander("💳 **Tarjetas**", expanded=True):
         with st.form("form_tarjetas", clear_on_submit=True):
             c1, c2 = st.columns(2)
@@ -897,9 +860,7 @@ def display_efectivo_section(terceros_list):
 def display_summary_and_save(worksheets):
     st.header("3. Verificación y Guardado", anchor=False, divider="rainbow")
     
-    # --- CAMBIO: PASAMOS TODAS LAS HOJAS NECESARIAS ---
     registros_ws, _, consecutivos_ws, global_consecutivo_ws = worksheets
-    # ----------------------------------------------------
 
     with st.container(border=True):
         sub_t = sum(float(t.get('Valor', 0)) for t in st.session_state.tarjetas)
@@ -931,13 +892,10 @@ def display_summary_and_save(worksheets):
             try:
                 cell = registros_ws.find(id_registro, in_column=1)
                 
-                # --- LÓGICA DE GUARDADO DE CONSECUTIVOS MODIFICADA ---
                 if cell:
-                    # Si el registro ya existe, reutilizamos los consecutivos que ya tenía.
                     consecutivo_asignado_tienda = registros_ws.cell(cell.row, 2).value
-                    consecutivo_global_doc = registros_ws.cell(cell.row, 15).value # Asumimos que estará en la columna 15
+                    consecutivo_global_doc = registros_ws.cell(cell.row, 15).value
                 else:
-                    # Si es un registro nuevo, generamos ambos consecutivos.
                     consecutivo_asignado_tienda = get_next_consecutive(consecutivos_ws, tienda)
                     consecutivo_global_doc = get_next_global_consecutive(global_consecutivo_ws)
                     
@@ -945,23 +903,18 @@ def display_summary_and_save(worksheets):
                         st.error("No se pudo generar uno de los consecutivos. No se guardará el registro.")
                         return
                     
-                    # Actualizamos ambos contadores en Google Sheets
                     update_consecutive(consecutivos_ws, tienda, consecutivo_asignado_tienda)
                     update_global_consecutive(global_consecutivo_ws, consecutivo_global_doc)
-                # --------------------------------------------------------
 
-                # --- NUEVA ESTRUCTURA DE LA FILA DE DATOS ---
-                # Se añade el nuevo consecutivo al final para no dañar el orden existente.
                 fila_datos = [
                     id_registro, consecutivo_asignado_tienda, tienda, fecha_str,
                     st.session_state.factura_inicial, st.session_state.factura_final, venta_total,
                     json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
                     json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
                     diferencia, datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                    "", # Columna 14 vacía
-                    consecutivo_global_doc # Columna 15 (O) para el nuevo consecutivo
+                    "",
+                    consecutivo_global_doc
                 ]
-                # ----------------------------------------------------
 
                 if cell:
                     registros_ws.update(f'A{cell.row}', [fila_datos])
@@ -1026,7 +979,6 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
 
     st.divider()
     
-    # --- Contenedores para botones de generación ---
     b1, b2, b3 = st.columns(3)
 
     with b1:
@@ -1057,7 +1009,6 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
                     )
                     st.success("Reporte Excel generado.")
 
-    # --- NUEVA SECCIÓN PARA ENVÍO DE CORREO ---
     with b3:
         with st.form("email_form"):
             recipient_email = st.text_input("Email del Gerente", placeholder="ejemplo@dominio.com")
@@ -1108,13 +1059,9 @@ def main():
     else:
         st.info("⏳ Esperando conexión con Google Sheets...")
 
-# --- MODIFICADO: Bloque de ejecución principal ---
+# --- BLOQUE DE EJECUCIÓN PRINCIPAL ---
 if __name__ == "__main__":
-    # Primero se asegura de que el estado de la sesión esté inicializado.
     initialize_session_state()
 
-    # Se llama a la función de verificación. Si retorna True (contraseña correcta),
-    # se ejecuta la función principal 'main()' que contiene la lógica de la app.
-    # Si retorna False, el usuario solo verá el formulario de login.
     if check_password():
         main()
