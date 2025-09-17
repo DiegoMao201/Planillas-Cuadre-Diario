@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: Cuadre_Diario_Caja_Final.py
-# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V3)
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V4)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -436,7 +436,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     return output.getvalue()
 
 # ======================================================================================
-# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO CORREGIDO) ---
+# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO MEJORADO) ---
 # ======================================================================================
 
 def format_cop(value):
@@ -454,19 +454,14 @@ def format_cop(value):
 
 def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
-    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
-    CORREGIDO para máxima compatibilidad y diseño profesional.
+    Genera un cuerpo de correo HTML profesional y visualmente atractivo, 
+    usando un diseño más compacto y horizontal para la tarjeta principal.
     """
-    meses = {
-        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-    }
-
     if start_date == end_date:
-        report_date_str = f"{start_date.day} de {meses[start_date.month]} de {start_date.year}"
+        report_date_str = f"Reporte del día: {start_date.strftime('%d/%m/%Y')}"
         subtitle_text = f"Reporte para: {selected_store}"
     else:
-        report_date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
+        report_date_str = f"Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
         subtitle_text = f"Reporte Consolidado para: {selected_store}"
     
     report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
@@ -483,12 +478,15 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     details_html = ""
     for tienda, records_list in grouped_records.items():
         details_html += f"""
-        <div style="margin-top: 20px; border-radius: 8px; overflow: hidden; border: 1px solid #e9ecef; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-            <div style="background-color: #0077b6; padding: 12px; color: #ffffff; font-size: 16px; font-weight: 500;">
-                Tienda: {tienda}
-            </div>
-            <div style="padding: 16px;">
-                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 20px;">
+            <tr>
+                <td align="left" style="background-color: #0077b6; padding: 10px; border-radius: 8px 8px 0 0;">
+                    <h3 style="color: #ffffff; font-size: 16px; margin: 0; padding-left: 5px;">Tienda: {tienda}</h3>
+                </td>
+            </tr>
+            <tr>
+                <td style="border: 1px solid #e9ecef; border-top: none; padding: 16px; border-radius: 0 0 8px 8px;">
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
         """
         
         # Resumen por fecha dentro de la tienda
@@ -500,47 +498,46 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
             date_grouped_records[fecha].append(r)
             
         for fecha, daily_records in date_grouped_records.items():
-            total_ingresos = sum(float(r.get('Venta_Total_Dia', 0)) for r in daily_records)
+            venta_total_sistema = sum(float(r.get('Venta_Total_Dia', 0)) for r in daily_records)
             total_ventas_tarjeta = sum(sum(float(t.get('Valor', 0)) for t in json.loads(r.get('Tarjetas', '[]'))) for r in daily_records)
             total_gastos = sum(sum(float(g.get('Valor', 0)) for g in json.loads(r.get('Gastos', '[]'))) for r in daily_records)
             total_retiros_y_consignaciones = sum(sum(float(c.get('Valor', 0)) for c in json.loads(r.get('Consignaciones', '[]'))) for r in daily_records) + sum(sum(float(e.get('Valor', 0)) for e in json.loads(r.get('Efectivo', '[]'))) for r in daily_records)
             
-            total_egresos = total_gastos + total_retiros_y_consignaciones
-            balance_neto = total_ingresos - total_egresos
+            total_desglose = total_ventas_tarjeta + total_gastos + total_retiros_y_consignaciones
+            diferencia = venta_total_sistema - total_desglose
             
+            # Subcard dentro del detalle de movimientos
             details_html += f"""
             <tr>
-                <td colspan="2" style="padding-top: 10px; font-weight: bold; font-size: 15px; padding-bottom: 5px; border-bottom: 1px solid #dee2e6;">Resumen del día: {fecha}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 4px; font-size: 14px; color: #495057;">💰 Venta Total</td>
-                <td align="right" style="color: #007200; font-weight: 500; font-size: 14px;">{format_cop(total_ingresos)}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 4px; font-size: 14px; color: #495057;">💳 Total Tarjetas</td>
-                <td align="right" style="color: #007200; font-weight: 500; font-size: 14px;">{format_cop(total_ventas_tarjeta)}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 4px; font-size: 14px; color: #495057;">💸 Total Gastos</td>
-                <td align="right" style="color: #d00000; font-weight: 500; font-size: 14px;">-{format_cop(total_gastos)}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 4px; font-size: 14px; color: #495057;">🏦 Total Consignaciones/Retiros</td>
-                <td align="right" style="color: #d00000; font-weight: 500; font-size: 14px;">-{format_cop(total_retiros_y_consignaciones)}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 4px; font-size: 14px; color: #495057; font-weight: bold; border-top: 1px dashed #dee2e6;">Balance Neto del Día</td>
-                <td align="right" style="font-size: 16px; font-weight: 700; color: #023e8a; padding: 8px 4px; border-top: 1px dashed #dee2e6;">{format_cop(balance_neto)}</td>
+                <td colspan="2">
+                    <div style="background-color:#fff; border-radius:10px; border:1px solid #e0e0e0; padding:15px; margin-top:15px;">
+                        <h4 style="font-size:16px; font-weight:600; margin:0 0 10px 0; color:#333;">Resumen del día: {fecha}</h4>
+                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">💰 Venta Total</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#007200;">{format_cop(venta_total_sistema)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">💳 Total Desglose</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#023e8a;">{format_cop(total_desglose)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Diferencia</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:{'#00B050' if diferencia == 0 else '#C00000'}; border-top:1px dashed #ccc;">{format_cop(diferencia)}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </td>
             </tr>
             """
-
         details_html += """
-                </table>
-            </div>
-        </div>
+                    </table>
+                </td>
+            </tr>
+        </table>
         """
 
-    # HTML principal del correo
+    # HTML principal del correo con el diseño compacto
     html_body = f"""<!DOCTYPE html>
 <html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -553,33 +550,38 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
         img {{ -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }}
         body {{ height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f8f9fa; }}
-        .header {{ background-color: #023e8a; color: #ffffff; padding: 20px; text-align: center; }}
-        .card {{ background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05); }}
     </style>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f8f9fa;">
-    <center style="width: 100%; background-color: #f8f9fa; padding: 20px 0;">
-        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
-            <div style="background: linear-gradient(90deg, #023e8a, #0077b6); padding: 25px; border-radius: 12px 12px 0 0; text-align: center;">
-                <h1 style="font-size: 24px; font-weight: 700; margin: 0 0 5px 0; color: #ffffff;">Resumen Gerencial de Caja</h1>
-                <p style="font-size: 14px; font-weight: 400; color: #caf0f8; margin: 0;">{subtitle_text}</p>
-                <div style="margin-top: 15px;">
-                    <span style="font-size: 13px; font-weight: 500; color: #ffffff; text-decoration: none; padding: 6px 15px; border-radius: 15px; display: inline-block; background-color: rgba(255, 255, 255, 0.15);">{report_date_str}</span>
-                </div>
-            </div>
-            <div style="padding: 24px;">
-                <h2 style="color: #023e8a; font-size: 18px; font-weight: 700; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
-                {details_html}
-            </div>
-            <div style="background-color: #f1f3f5; padding: 16px; border-radius: 0 0 12px 12px; text-align: center;">
-                <p style="font-size: 12px; color: #6c757d; margin: 0;">Este reporte fue generado automáticamente el {report_time_str}.<br><strong style="color: #495057;">Sistema de Gestión Financiera</strong></p>
-            </div>
+    <center style="width: 100%; background-color: #f8f9fa;">
+        <div style="background-color:#f8f9fa; max-width:600px; margin:0 auto; padding: 20px 0;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
+                <tr>
+                    <td align="center" style="background: linear-gradient(90deg, #023e8a, #0077b6); padding: 25px; border-radius: 12px 12px 0 0;">
+                        <h1 style="font-size: 24px; font-weight: 700; margin: 0 0 5px 0; color: #ffffff;">Resumen Gerencial de Caja</h1>
+                        <p style="font-size: 14px; font-weight: 400; color: #caf0f8; margin: 0;">{subtitle_text}</p>
+                        <div style="margin-top: 15px;">
+                            <span style="font-size: 13px; font-weight: 500; color: #ffffff; text-decoration: none; padding: 6px 15px; border-radius: 15px; display: inline-block; background-color: rgba(255, 255, 255, 0.15);">{report_date_str}</span>
+                        </div>
+                    </td>
+                </tr>
+                <tr>
+                    <td align="left" style="padding: 24px;">
+                        <h2 style="color: #023e8a; font-size: 18px; font-weight: 700; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
+                        {details_html}
+                    </td>
+                </tr>
+                <tr>
+                    <td bgcolor="#f1f3f5" align="center" style="padding: 16px; border-radius: 0 0 12px 12px;">
+                        <p style="font-size: 12px; color: #6c757d; margin: 0;">Este reporte fue generado automáticamente el {report_time_str}.<br><strong style="color: #495057;">Sistema de Gestión Financiera</strong></p>
+                    </td>
+                </tr>
+            </table>
         </div>
     </center>
 </body>
 </html>"""
     return html_body
-
 
 def send_summary_email(registros_ws, start_date, end_date, selected_store, recipient_email):
     """
