@@ -9,6 +9,39 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
+import hashlib # <--- NUEVO: Se importa la librería para encriptar la contraseña
+
+# --- NUEVA FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
+def check_password():
+    """
+    Muestra un formulario de login y retorna True si la contraseña es correcta.
+    """
+    # Si el usuario ya está autenticado en la sesión actual, no se le vuelve a pedir.
+    if st.session_state.get("authenticated", False):
+        return True
+
+    st.header("🔐 Autenticación Requerida")
+    st.write("Por favor, ingrese la contraseña para acceder al formulario.")
+
+    # Se crea un formulario para el campo de contraseña y el botón.
+    with st.form("login"):
+        password = st.text_input("Contraseña", type="password")
+        submitted = st.form_submit_button("Ingresar")
+
+        if submitted:
+            # Se encripta la contraseña ingresada por el usuario para compararla.
+            hashed_input = hashlib.sha256(password.encode()).hexdigest()
+            # Se obtiene la contraseña correcta (ya encriptada) desde los secrets.
+            correct_hashed_password = st.secrets["credentials"]["hashed_password"]
+            
+            # Se comparan ambas contraseñas encriptadas.
+            if hashed_input == correct_hashed_password:
+                # Si es correcta, se guarda el estado de autenticación y se recarga la app.
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("La contraseña es incorrecta.")
+    return False
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Cuadre Diario de Caja")
@@ -443,17 +476,20 @@ def initialize_session_state():
     defaults = {
         'page': 'Formulario', 'venta_total_dia': 0.0, 'factura_inicial': "", 'factura_final': "",
         'tarjetas': [], 'consignaciones': [], 'gastos': [], 'efectivo': [],
+        'authenticated': False # <--- MODIFICADO: Se añade el estado de autenticación
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 def clear_form_state():
-    """Limpia el formulario, conservando la tienda y fecha seleccionadas."""
+    """Limpia el formulario, conservando la tienda, fecha y estado de autenticación."""
     tienda = st.session_state.get('tienda_seleccionada', None)
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
+    auth_status = st.session_state.get('authenticated', False) # <--- NUEVO: Se guarda el estado de auth
     
-    keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada']
+    # MODIFICADO: Se añade 'authenticated' a las claves que no se deben borrar
+    keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada', 'authenticated']
     for key in list(st.session_state.keys()):
         if key not in keys_to_keep:
             del st.session_state[key]
@@ -461,6 +497,7 @@ def clear_form_state():
     initialize_session_state()
     st.session_state.tienda_seleccionada = tienda
     st.session_state.fecha_seleccionada = fecha
+    st.session_state.authenticated = auth_status # <--- NUEVO: Se restaura el estado de auth
 
 # --- 5. COMPONENTES DE LA INTERFAZ DE USUARIO ---
 def format_currency(num):
@@ -837,7 +874,7 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
 # --- 7. FLUJO PRINCIPAL DE LA APLICACIÓN ---
 def main():
     """Función principal que ejecuta la aplicación Streamlit."""
-    initialize_session_state()
+    # La inicialización de estado se movió al bloque principal
     st.title("CUADRE DIARIO DE CAJA")
 
     worksheets = connect_to_gsheet()
@@ -873,5 +910,13 @@ def main():
     else:
         st.info("⏳ Esperando conexión con Google Sheets...")
 
+# --- MODIFICADO: Bloque de ejecución principal ---
 if __name__ == "__main__":
-    main()
+    # Primero se asegura de que el estado de la sesión esté inicializado.
+    initialize_session_state()
+
+    # Se llama a la función de verificación. Si retorna True (contraseña correcta),
+    # se ejecuta la función principal 'main()' que contiene la lógica de la app.
+    # Si retorna False, el usuario solo verá el formulario de login.
+    if check_password():
+        main()
