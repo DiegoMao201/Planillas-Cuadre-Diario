@@ -115,22 +115,33 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
 
 def get_next_global_consecutive(global_consecutivo_ws):
     """
-    Obtiene el siguiente número consecutivo global para el documento del ERP.
+    Obtiene el siguiente número consecutivo global para el documento del ERP,
+    buscando la etiqueta 'Ultimo_Consecutivo_Global' y leyendo el valor.
     """
     try:
-        last_consecutive = int(global_consecutivo_ws.acell('B1').value)
-        return last_consecutive + 1
+        # Busca la celda con la etiqueta 'Ultimo_Consecutivo_Global'
+        cell = global_consecutivo_ws.find('Ultimo_Consecutivo_Global')
+        if cell:
+            # Lee el valor de la celda a la derecha de la etiqueta (misma fila, columna + 1)
+            last_consecutive = int(global_consecutivo_ws.cell(cell.row, cell.col + 1).value)
+            return last_consecutive + 1
+        else:
+            st.error("Etiqueta 'Ultimo_Consecutivo_Global' no encontrada. Verifique la hoja 'GlobalConsecutivo'.")
+            return None
     except Exception as e:
-        st.error(f"Error al obtener consecutivo global desde la hoja 'GlobalConsecutivo': {e}")
-        st.warning("Asegúrese que la hoja exista y que la celda B1 contenga un número.")
+        st.error(f"Error al obtener consecutivo global: {e}")
         return None
 
 def update_global_consecutive(global_consecutivo_ws, new_consecutive):
     """
-    Actualiza el último consecutivo global usado.
+    Actualiza el último consecutivo global usado, buscando la etiqueta y actualizando el valor.
     """
     try:
-        global_consecutivo_ws.update_acell('B1', new_consecutive)
+        # Busca la celda con la etiqueta 'Ultimo_Consecutivo_Global'
+        cell = global_consecutivo_ws.find('Ultimo_Consecutivo_Global')
+        if cell:
+            # Actualiza el valor de la celda a la derecha de la etiqueta
+            global_consecutivo_ws.update_cell(cell.row, cell.col + 1, new_consecutive)
     except Exception as e:
         st.error(f"Error al actualizar el consecutivo global: {e}")
 
