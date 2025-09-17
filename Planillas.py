@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 import hashlib
 import yagmail
 import smtplib
-import locale
+# Se elimina "import locale" porque ya no es necesario
 
 # --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
@@ -436,12 +436,17 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
 # --- INICIO DE LA SECCIÓN MODIFICADA PARA EL CORREO ELECTRÓNICO ---
 
 def format_cop(value):
-    """Formatea un número como moneda colombiana."""
-    try:
-        locale.setlocale(locale.LC_ALL, 'es_CO.UTF-8')
-    except locale.Error:
-        locale.setlocale(locale.LC_ALL, '') # Fallback to default locale
-    return locale.currency(value, symbol=True, grouping=True, international=False).split(",")[0]
+    """
+    Formatea un número como moneda colombiana (ej: $ 1.234.500)
+    sin depender del módulo 'locale' para evitar errores en el servidor.
+    """
+    if not isinstance(value, (int, float)):
+        return "$ 0"
+    # Formatea el número con comas como separadores de miles y sin decimales.
+    formatted_value = f"{value:,.0f}"
+    # Reemplaza las comas por puntos, como es común en Colombia.
+    formatted_value = formatted_value.replace(",", ".")
+    return f"$ {formatted_value}"
 
 
 def generate_professional_email_body(records, start_date, end_date, selected_store):
@@ -478,14 +483,15 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     saldo_final_periodo = balance_neto
     
     # --- 3. FORMATEO DE FECHAS Y TEXTOS ---
-    try:
-        locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
-    except locale.Error:
-        locale.setlocale(locale.LC_ALL, '') # Fallback
+    # Diccionario para traducir nombres de meses
+    meses = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
 
     # Si el rango es un solo día
     if start_date == end_date:
-        report_date_str = start_date.strftime("%d de %B de %Y")
+        report_date_str = f"{start_date.day} de {meses[start_date.month]} de {start_date.year}"
         subtitle_text = f"Reporte para: {selected_store}"
     else: # Si es un rango de varios días
         report_date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
