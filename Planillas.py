@@ -1,3 +1,7 @@
+# ======================================================================================
+# ARCHIVO: Cuadre_Diario_Caja_Final.py
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional)
+# ======================================================================================
 import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -12,7 +16,6 @@ from openpyxl.utils import get_column_letter
 import hashlib
 import yagmail
 import smtplib
-# Se elimina "import locale" porque ya no es necesario
 
 # --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
@@ -432,8 +435,9 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     
     return output.getvalue()
 
-
-# --- INICIO DE LA SECCIÓN MODIFICADA PARA EL CORREO ELECTRÓNICO ---
+# ======================================================================================
+# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO) ---
+# ======================================================================================
 
 def format_cop(value):
     """
@@ -451,58 +455,45 @@ def format_cop(value):
 
 def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
-    Genera un cuerpo de correo HTML profesional y visualmente atractivo,
-    basado en la plantilla proporcionada.
+    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
     """
     # --- 1. CÁLCULO DE TOTALES CONSOLIDADOS DEL PERIODO ---
     total_ingresos = 0
     total_ventas_tarjeta = 0
     total_gastos = 0
-    # "Retiros" agrupa consignaciones y entregas de efectivo
     total_retiros_y_consignaciones = 0
 
     for record in records:
-        # Sumar ingresos
         total_ingresos += float(record.get('Venta_Total_Dia', 0))
-        # Sumar ventas con tarjeta
         total_ventas_tarjeta += sum(float(t.get('Valor', 0)) for t in json.loads(record.get('Tarjetas', '[]')))
-        # Sumar gastos
         total_gastos += sum(float(g.get('Valor', 0)) for g in json.loads(record.get('Gastos', '[]')))
-        # Sumar consignaciones y movimientos de efectivo
         total_retiros_y_consignaciones += sum(float(c.get('Valor', 0)) for c in json.loads(record.get('Consignaciones', '[]')))
         total_retiros_y_consignaciones += sum(float(e.get('Valor', 0)) for e in json.loads(record.get('Efectivo', '[]')))
         
     # --- 2. CÁLCULOS DERIVADOS ---
     total_egresos = total_gastos + total_retiros_y_consignaciones
     balance_neto = total_ingresos - total_egresos
-    
-    # Asumimos que 'Ventas en Efectivo' es el total de ingresos menos lo que se pagó con tarjeta.
     total_ventas_efectivo = total_ingresos - total_ventas_tarjeta
-    
-    # Saldo final del periodo es el neto (asumiendo saldo inicial 0 para el rango de fechas)
     saldo_final_periodo = balance_neto
     
     # --- 3. FORMATEO DE FECHAS Y TEXTOS ---
-    # Diccionario para traducir nombres de meses
     meses = {
         1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
         7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
     }
 
-    # Si el rango es un solo día
     if start_date == end_date:
         report_date_str = f"{start_date.day} de {meses[start_date.month]} de {start_date.year}"
         subtitle_text = f"Reporte para: {selected_store}"
-    else: # Si es un rango de varios días
+    else:
         report_date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
         subtitle_text = f"Reporte Consolidado para: {selected_store}"
     
     report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
     
-    # Determinar si el resultado es positivo o negativo para el estilo
     balance_color_class = "positive" if balance_neto >= 0 else "negative"
     balance_display_text = "Resultado positivo" if balance_neto >= 0 else "Resultado negativo"
-    balance_sign = "+" if balance_neto >= 0 else ""
+    balance_sign = "" if balance_neto < 0 else "" # El signo negativo ya lo pone el número
 
     # --- 4. CONSTRUCCIÓN DEL HTML CON F-STRINGS ---
     html_body = f"""
@@ -514,52 +505,41 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         <title>Cuadre Diario de Caja</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-            body {{ font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 40px 20px; min-height: 100vh; }}
-            .email-container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 20px; box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15); overflow: hidden; }}
-            .header {{ background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 40px 30px; text-align: center; position: relative; }}
-            .header::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.1"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.1"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.1"/><circle cx="10" cy="60" r="0.5" fill="white" opacity="0.1"/><circle cx="90" cy="40" r="0.5" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>'); }}
-            .header-content {{ position: relative; z-index: 1; }}
-            .logo {{ width: 60px; height: 60px; background: rgba(255, 255, 255, 0.2); border-radius: 15px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px); }}
-            .logo svg {{ width: 30px; height: 30px; fill: white; }}
-            .header h1 {{ color: white; font-size: 28px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.5px; }}
-            .header .subtitle {{ color: rgba(255, 255, 255, 0.9); font-size: 16px; font-weight: 400; }}
-            .date-badge {{ background: rgba(255, 255, 255, 0.2); color: white; padding: 8px 20px; border-radius: 25px; font-size: 14px; font-weight: 500; margin-top: 20px; display: inline-block; backdrop-filter: blur(10px); }}
-            .content {{ padding: 40px 30px; }}
-            .summary-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }}
-            .summary-card {{ background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-radius: 15px; padding: 25px; border: 1px solid #cbd5e1; position: relative; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }}
-            .summary-card::before {{ content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); }}
-            .summary-card h3 {{ color: #475569; font-size: 14px; font-weight: 500; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .summary-card .amount {{ color: #1e293b; font-size: 24px; font-weight: 700; margin-bottom: 5px; }}
-            .summary-card .change {{ font-size: 12px; font-weight: 500; }}
-            .positive {{ color: #059669; }}
-            .negative {{ color: #dc2626; }}
-            .details-section {{ background: #ffffff; border-radius: 15px; padding: 25px; margin-bottom: 30px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }}
-            .details-section h2 {{ color: #1e293b; font-size: 18px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }}
-            .details-section h2::before {{ content: ''; width: 4px; height: 20px; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); border-radius: 2px; }}
-            .detail-row {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }}
-            .detail-row:last-child {{ border-bottom: none; font-weight: 600; color: #1e293b; padding-top: 15px; margin-top: 10px; border-top: 2px solid #e2e8f0; }}
-            .detail-label {{ color: #64748b; font-size: 14px; font-weight: 500; }}
-            .detail-value {{ color: #1e293b; font-size: 14px; font-weight: 600; }}
-            .footer {{ background: #f1f5f9; padding: 25px 30px; text-align: center; border-top: 1px solid #cbd5e1; }}
-            .footer p {{ color: #64748b; font-size: 12px; margin-bottom: 10px; }}
-            .footer .company {{ color: #1e293b; font-weight: 600; font-size: 14px; }}
-            @media (max-width: 600px) {{ .summary-grid {{ grid-template-columns: 1fr; }} .email-container {{ margin: 0; border-radius: 0; }} body {{ padding: 0; }} }}
+            body {{ font-family: 'Inter', sans-serif; background-color: #f3f4f6; padding: 20px; margin: 0; }}
+            .email-container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); overflow: hidden; border: 1px solid #e5e7eb; }}
+            .header {{ background: #111827; padding: 32px; text-align: center; color: white; }}
+            .header h1 {{ font-size: 26px; font-weight: 700; margin: 0 0 8px 0; }}
+            .header .subtitle {{ font-size: 16px; font-weight: 400; color: #d1d5db; margin: 0; }}
+            .date-badge {{ background: rgba(255, 255, 255, 0.1); color: #f9fafb; padding: 6px 16px; border-radius: 20px; font-size: 14px; font-weight: 500; margin-top: 16px; display: inline-block; }}
+            .content {{ padding: 32px; }}
+            .summary-grid {{ display: table; width: 100%; border-spacing: 16px 0; margin: -8px; margin-bottom: 24px; }}
+            .summary-card {{ display: table-cell; width: 50%; background-color: #f9fafb; border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb; }}
+            .summary-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
+            .summary-card .amount {{ color: #111827; font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }}
+            .summary-card .change {{ font-size: 12px; font-weight: 500; color: #6b7280; }}
+            .positive {{ color: #10b981 !important; }}
+            .negative {{ color: #ef4444 !important; }}
+            .details-section {{ margin-bottom: 24px; }}
+            .details-section h2 {{ color: #111827; font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #f3f4f6; }}
+            .detail-row {{ display: table; width: 100%; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }}
+            .detail-row:last-child {{ border-bottom: none; }}
+            .detail-label, .detail-value {{ display: table-cell; vertical-align: middle; font-size: 14px; }}
+            .detail-label {{ color: #6b7280; font-weight: 500; }}
+            .detail-value {{ color: #111827; font-weight: 600; text-align: right; }}
+            .final-balance-card {{ background-color: #f9fafb; border-radius: 12px; padding: 24px; text-align: center; border: 1px solid #e5e7eb; }}
+            .final-balance-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
+            .final-balance-card .amount {{ font-size: 32px; font-weight: 700; margin: 0 0 4px 0; }}
+            .footer {{ background: #f3f4f6; padding: 24px; text-align: center; }}
+            .footer p {{ color: #6b7280; font-size: 12px; margin: 0 0 8px 0; }}
+            .footer .company {{ color: #111827; font-weight: 600; font-size: 14px; }}
         </style>
     </head>
     <body>
         <div class="email-container">
             <div class="header">
-                <div class="header-content">
-                    <div class="logo">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-                        </svg>
-                    </div>
-                    <h1>Cuadre de Caja Consolidado</h1>
-                    <p class="subtitle">{subtitle_text}</p>
-                    <div class="date-badge">{report_date_str}</div>
-                </div>
+                <h1>Cuadre de Caja Consolidado</h1>
+                <p class="subtitle">{subtitle_text}</p>
+                <div class="date-badge">{report_date_str}</div>
             </div>
             <div class="content">
                 <div class="summary-grid">
@@ -592,20 +572,16 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
                         <span class="detail-label">(-) Retiros y Consignaciones</span>
                         <span class="detail-value negative">-{format_cop(total_retiros_y_consignaciones)}</span>
                     </div>
-                    <div class="detail-row">
-                        <span class="detail-label">Saldo Neto del Periodo</span>
-                        <span class="detail-value {balance_color_class}">{format_cop(saldo_final_periodo)}</span>
-                    </div>
                 </div>
-                <div class="summary-card" style="grid-column: 1 / -1; text-align: center;">
+                <div class="final-balance-card">
                     <h3>Balance Neto del Periodo</h3>
-                    <div class="amount {balance_color_class}" style="font-size: 32px;">{balance_sign}{format_cop(balance_neto)}</div>
+                    <div class="amount {balance_color_class}">{format_cop(balance_neto)}</div>
                     <div class="change {balance_color_class}">{balance_display_text}</div>
                 </div>
             </div>
             <div class="footer">
                 <p>Este reporte fue generado automáticamente el <span>{report_time_str}</span></p>
-                <p class="company">Sistema de Gestión Financiera • Tu Empresa</p>
+                <p class="company">Sistema de Gestión Financiera</p>
             </div>
         </div>
     </body>
@@ -663,7 +639,9 @@ def send_summary_email(registros_ws, start_date, end_date, selected_store, recip
     except Exception as e:
         st.error(f"Ocurrió un error inesperado al enviar el correo: {e}")
 
-# --- FIN DE LA SECCIÓN MODIFICADA ---
+# ======================================================================================
+# --- FIN DE LA SECCIÓN DE CORREO ELECTRÓNICO ---
+# ======================================================================================
 
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
