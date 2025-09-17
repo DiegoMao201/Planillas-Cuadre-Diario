@@ -455,8 +455,7 @@ def format_cop(value):
 
 def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
-    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
-    CORREGIDO para máxima compatibilidad y diseño profesional.
+    Genera un cuerpo de correo HTML profesional, visualmente impactante y compatible.
     """
     # --- 1. CÁLCULO DE TOTALES CONSOLIDADOS DEL PERIODO ---
     total_ingresos = 0
@@ -484,7 +483,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
 
     if start_date == end_date:
         report_date_str = f"{start_date.day} de {meses[start_date.month]} de {start_date.year}"
-        subtitle_text = f"Reporte para: {selected_store}"
+        subtitle_text = f"Reporte de Caja para: {selected_store}"
     else:
         report_date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
         subtitle_text = f"Reporte Consolidado para: {selected_store}"
@@ -492,102 +491,112 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
     
     # --- 4. CONSTRUCCIÓN DEL HTML ---
-    # NOTA: Este HTML está diseñado para ser robusto en clientes de correo. Usa tablas para el layout.
-    # Se eliminó la indentación de Python dentro del string para evitar errores de parseo CSS.
+    # Este HTML está diseñado para máxima compatibilidad, usando tablas para el layout.
     html_body = f"""
 <!DOCTYPE html>
-<html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Resumen Gerencial de Caja</title>
-<style type="text/css">
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
-table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
-img {{ -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }}
-body {{ height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f8f9fa; font-family: 'Roboto', sans-serif; }}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resumen Gerencial de Caja</title>
+    <style>
+        body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+        table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+        img {{ -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }}
+        body {{ height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f4f7f9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; }}
+        h1, h2, h3, p {{ margin: 0; padding: 0; }}
+        .main-table {{
+            max-width: 600px !important;
+            width: 600px !important;
+        }}
+    </style>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f8f9fa;">
-<table border="0" cellpadding="0" cellspacing="0" width="100%">
-<tr>
-<td bgcolor="#f8f9fa" align="center" style="padding: 20px 0;">
-<table border="0" cellpadding="0" cellspacing="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden;">
-<tr>
-<td align="center" style="background: linear-gradient(90deg, #023e8a, #0077b6); padding: 32px;">
-<h1 style="font-size: 28px; font-weight: 700; margin: 0 0 8px 0; color: #ffffff;">Resumen Gerencial de Caja</h1>
-<p style="font-size: 16px; font-weight: 400; color: #caf0f8; margin: 0;">{subtitle_text}</p>
-<table border="0" cellspacing="0" cellpadding="0" style="margin-top: 20px;">
-<tr>
-<td align="center" style="border-radius: 20px; background-color: rgba(255, 255, 255, 0.15);" bgcolor="rgba(255, 255, 255, 0.15)">
-<a style="font-size: 14px; font-weight: 500; color: #ffffff; text-decoration: none; padding: 8px 18px; border-radius: 20px; display: inline-block;">{report_date_str}</a>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-<tr>
-<td align="center" style="padding: 32px;">
-<table border="0" cellpadding="0" cellspacing="0" width="100%">
-<tr>
-<td align="center" style="padding-bottom: 32px;">
-<table border="0" cellpadding="0" cellspacing="0" width="100%">
-<tr>
-<td width="48%" valign="top">
-<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; text-align: center;">
-<tr><td style="padding: 20px;">
-<h3 style="color: #495057; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.8px;">📈 Ingresos Totales</h3>
-<p style="color: #212529; font-size: 32px; font-weight: 700; margin: 0; line-height: 1.2;">{format_cop(total_ingresos)}</p>
-</td></tr>
-</table>
-</td>
-<td width="4%"></td>
-<td width="48%" valign="top">
-<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 10px; text-align: center;">
-<tr><td style="padding: 20px;">
-<h3 style="color: #495057; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.8px;">📉 Egresos Totales</h3>
-<p style="color: #212529; font-size: 32px; font-weight: 700; margin: 0; line-height: 1.2;">{format_cop(total_egresos)}</p>
-</td></tr>
-</table>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-<tr>
-<td align="left">
-<h2 style="color: #023e8a; font-size: 20px; font-weight: 700; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
-<table border="0" cellpadding="0" cellspacing="0" width="100%">
-<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Ventas en Efectivo</td><td align="right" style="color: #007200; font-weight: 500;">{format_cop(total_ventas_efectivo)}</td></tr>
-<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Ventas con Tarjeta</td><td align="right" style="color: #007200; font-weight: 500;">{format_cop(total_ventas_tarjeta)}</td></tr>
-<tr style="border-bottom: 1px solid #e9ecef;"><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Gastos Operativos</td><td align="right" style="color: #d00000; font-weight: 500;">-{format_cop(total_gastos)}</td></tr>
-<tr><td style="padding: 16px 4px; font-size: 15px; color: #6c757d;">Retiros y Consignaciones</td><td align="right" style="color: #d00000; font-weight: 500;">-{format_cop(total_retiros_y_consignaciones)}</td></tr>
-</table>
-</td>
-</tr>
-<tr>
-<td align="center" style="padding-top: 32px;">
-<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #023e8a; border-radius: 12px; text-align: center; color: #ffffff;">
-<tr><td style="padding: 24px;">
-<h3 style="font-size: 16px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 1px; opacity: 0.8;">Balance Neto del Periodo</h3>
-<p style="font-size: 40px; font-weight: 700; margin: 0 0 4px 0;">{format_cop(balance_neto)}</p>
-</td></tr>
-</table>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-<tr>
-<td bgcolor="#f1f3f5" align="center" style="padding: 24px;">
-<p style="font-size: 12px; color: #6c757d; margin: 0;">Este reporte fue generado automáticamente el {report_time_str}.<br><strong style="color: #495057;">Sistema de Gestión Financiera</strong></p>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-</table>
+<body style="margin: 0 !important; padding: 0 !important; background-color: #f4f7f9;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td align="center" style="padding: 20px;">
+                <table border="0" cellpadding="0" cellspacing="0" width="600" class="main-table" style="background-color: #ffffff; border: 1px solid #dfe6ed; border-radius: 8px;">
+                    <tr>
+                        <td align="center" style="background-color: #0d1b2a; padding: 30px; border-top-left-radius: 8px; border-top-right-radius: 8px;">
+                            <h1 style="color: #ffffff; font-size: 28px; font-weight: 600;">Resumen Gerencial de Caja</h1>
+                            <p style="color: #adb5bd; font-size: 16px; margin-top: 8px;">{subtitle_text}</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 30px 25px;">
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td>
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                            <tr>
+                                                <td width="48%" valign="top">
+                                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; border-left: 4px solid #1a73e8;">
+                                                        <tr><td style="padding: 18px;">
+                                                            <h3 style="color: #495057; font-size: 14px; font-weight: 600; text-transform: uppercase;">Ingresos Totales</h3>
+                                                            <p style="color: #212529; font-size: 28px; font-weight: 700; margin-top: 6px;">{format_cop(total_ingresos)}</p>
+                                                        </td></tr>
+                                                    </table>
+                                                </td>
+                                                <td width="4%"></td>
+                                                <td width="48%" valign="top">
+                                                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f9fa; border-radius: 6px; border-left: 4px solid #e63946;">
+                                                        <tr><td style="padding: 18px;">
+                                                            <h3 style="color: #495057; font-size: 14px; font-weight: 600; text-transform: uppercase;">Egresos Totales</h3>
+                                                            <p style="color: #212529; font-size: 28px; font-weight: 700; margin-top: 6px;">{format_cop(total_egresos)}</p>
+                                                        </td></tr>
+                                                    </table>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                                <tr><td style="padding: 25px 0;"></td></tr>
+                                <tr>
+                                    <td>
+                                        <h2 style="color: #0d1b2a; font-size: 20px; font-weight: 600; padding-bottom: 10px; border-bottom: 2px solid #e9ecef;">Desglose del Período</h2>
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 15px;">
+                                            <tr>
+                                                <td style="padding: 14px 0; font-size: 15px; color: #495057; border-bottom: 1px solid #e9ecef;">Ventas en Efectivo</td>
+                                                <td align="right" style="font-weight: 600; color: #1e853f;">+ {format_cop(total_ventas_efectivo)}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 14px 0; font-size: 15px; color: #495057; border-bottom: 1px solid #e9ecef;">Ventas con Tarjeta</td>
+                                                <td align="right" style="font-weight: 600; color: #1e853f;">+ {format_cop(total_ventas_tarjeta)}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 14px 0; font-size: 15px; color: #495057; border-bottom: 1px solid #e9ecef;">Gastos Operativos</td>
+                                                <td align="right" style="font-weight: 600; color: #c91826;">- {format_cop(total_gastos)}</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 14px 0; font-size: 15px; color: #495057;">Retiros y Consignaciones</td>
+                                                <td align="right" style="font-weight: 600; color: #c91826;">- {format_cop(total_retiros_y_consignaciones)}</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                                <tr><td style="padding: 25px 0;"></td></tr>
+                                <tr>
+                                    <td align="center" style="background-color: #0d1b2a; border-radius: 8px; padding: 25px;">
+                                        <h3 style="font-size: 16px; font-weight: 500; color: #adb5bd; text-transform: uppercase; letter-spacing: 1px;">Balance Neto</h3>
+                                        <p style="font-size: 36px; font-weight: 700; color: #ffffff; margin-top: 8px;">{format_cop(balance_neto)}</p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                     <tr>
+                        <td align="center" style="padding: 20px; background-color: #e9ecef; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;">
+                            <p style="font-size: 12px; color: #6c757d;">
+                                Reporte generado el {report_time_str} para <strong>{report_date_str}</strong>.
+                                <br>
+                                <span style="color: #495057;">Sistema de Gestión Financiera</span>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
 </body>
 </html>
 """
