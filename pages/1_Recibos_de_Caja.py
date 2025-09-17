@@ -16,6 +16,7 @@ para cada monto de efectivo recaudado.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS (Función Reutilizada) ---
+# Esta función asume que tienes configurado el archivo de credenciales de Google Sheets
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
     """
@@ -51,8 +52,6 @@ def get_app_config(config_ws):
         return [], []
 
 # --- LÓGICA PRINCIPAL DE LA PÁGINA ---
-
-# 1. Conectar a Google Sheets y obtener las listas de destinos
 config_ws = connect_to_gsheet()
 bancos, terceros = get_app_config(config_ws)
 opciones_destino = ["-- Seleccionar --"] + bancos + terceros
@@ -60,7 +59,6 @@ opciones_destino = ["-- Seleccionar --"] + bancos + terceros
 if not opciones_destino or len(opciones_destino) == 1:
     st.error("No se pudieron cargar los destinos (bancos/terceros) desde la hoja 'Configuracion'. La página no puede funcionar.")
 else:
-    # 2. Componente para subir el archivo Excel
     uploaded_file = st.file_uploader(
         "📂 Sube tu archivo Excel de recibos de caja",
         type=['xlsx', 'xls']
@@ -68,16 +66,22 @@ else:
 
     if uploaded_file is not None:
         st.success("¡Archivo cargado exitosamente! Ahora puedes procesarlo.")
-    
+        
         try:
-            # 3. Leer el archivo Excel, indicando que el encabezado está en la fila 3 (índice 2)
+            # Leer el archivo Excel, indicando que el encabezado está en la fila 3 (índice 2)
             df = pd.read_excel(uploaded_file, header=2)
 
-            # 4. Limpiar los datos: filtrar las filas que no tienen un número de recibo
-            df_filtrado = df.dropna(subset=['NUMRECIBO'])
-
+            # Convertir todas las columnas a string para un filtrado seguro
+            df_str = df.astype(str)
+            
+            # Limpiar los datos de filas con "SUBTOTALES", "TOTALES" o filas completamente vacías
+            df_filtrado = df_str[~df_str.apply(lambda row: row.astype(str).str.contains('SUBTOTALES|TOTALES', case=False).any() or row.isnull().all(), axis=1)]
+            
+            # Eliminar filas donde 'NUMRECIBO' es 'nan' (vacío) después de la limpieza
+            df_filtrado = df_filtrado.dropna(subset=['NUMRECIBO'])
+            
             # 5. Seleccionar y renombrar las columnas que necesitas
-            # Basado en la estructura de tu imagen, se usan los nombres de la fila 3
+            # Se usa .copy() para evitar SettingWithCopyWarning
             df_resumen = df_filtrado[['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRELIENTE', 'IMPORTE']].copy()
 
             # Renombrar las columnas para una mejor visualización en la tabla
@@ -89,11 +93,19 @@ else:
             }, inplace=True)
             
             # Limpiar la columna de importes, que en tu archivo tiene dos valores en una celda
-            # Tomamos solo el primer valor (el de arriba)
-            df_resumen['Valor Efectivo'] = df_resumen['Valor Efectivo'].apply(
-                lambda x: str(x).split(' ')[0].replace(',', '').replace('.', '').replace('$', '')
-            ).astype(float)
+            # Usamos un try-except para manejar posibles errores de conversión
+            def clean_and_convert(value):
+                try:
+                    # Dividir la cadena, tomar el primer valor, limpiar y convertir a float
+                    return float(str(value).split(' ')[0].replace('$', '').replace('.', '').replace(',', ''))
+                except (ValueError, IndexError):
+                    return None
             
+            df_resumen['Valor Efectivo'] = df_resumen['Valor Efectivo'].apply(clean_and_convert)
+            
+            # Eliminar cualquier fila que tenga un valor no numérico después de la limpieza
+            df_resumen.dropna(subset=['Valor Efectivo'], inplace=True)
+
             # Verificamos si la tabla tiene datos después de la limpieza
             if df_resumen.empty:
                 st.warning("El archivo no contiene recibos de efectivo válidos. Revisa el formato.")
@@ -146,16 +158,14 @@ else:
                     else:
                         st.success("¡Asignaciones procesadas! Los datos están listos para ser usados.")
                         
-                        # --- FUTURA LÓGICA: GENERACIÓN DEL TXT ---
-                        # Aquí es donde iría el código para generar el archivo TXT
-                        # basado en la estructura que necesites.
+                        # --- LÓGICA: GENERACIÓN DEL TXT ---
+                        # Aquí puedes agregar la lógica para generar el archivo TXT con el formato que desees
                         
                         # Ejemplo de preparación del contenido para el TXT
                         txt_content = "Resumen de Recibos de Caja\n\n"
                         txt_content += edited_df.to_string(index=False)
                         
                         # Botón de descarga del archivo
-                        # Asegúrate de que el formato final del TXT coincida con lo que necesitas.
                         st.download_button(
                             label="⬇️ Descargar Archivo de Resumen",
                             data=txt_content,
