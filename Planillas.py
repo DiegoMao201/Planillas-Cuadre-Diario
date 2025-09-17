@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: Cuadre_Diario_Caja_Final.py
-# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V2)
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V3)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -533,8 +533,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         """
 
     # HTML principal del correo
-    html_body = f"""
-<!DOCTYPE html>
+    html_body = f"""<!DOCTYPE html>
 <html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
     <meta charset="UTF-8">
@@ -549,7 +548,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     </style>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f8f9fa;">
-    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: -20px;">
         <tr>
             <td bgcolor="#f8f9fa" align="center" style="padding: 20px 0;">
                 <table border="0" cellpadding="0" cellspacing="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
@@ -582,8 +581,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         </tr>
     </table>
 </body>
-</html>
-    """
+</html>"""
     return html_body
 
 
