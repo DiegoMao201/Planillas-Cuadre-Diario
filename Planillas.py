@@ -9,7 +9,9 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
-import hashlib # <--- NUEVO: Se importa la librería para encriptar la contraseña
+import hashlib
+import yagmail  # <--- NUEVO: Para enviar correos
+import smtplib  # <--- NUEVO: Para manejar errores de SMTP
 
 # --- NUEVA FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
@@ -470,6 +472,191 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     return output.getvalue()
 # --- FIN DE NUEVA FUNCIÓN MEJORADA ---
 
+# --- INICIO DE NUEVAS FUNCIONES PARA EL CORREO GERENCIAL ---
+def generate_summary_email_body(records, start_date, end_date, selected_store):
+    """
+    Genera el cuerpo HTML para el correo de resumen gerencial.
+    """
+    records_by_store = {}
+    for record in records:
+        store = record.get('Tienda', 'Sin Tienda')
+        if store not in records_by_store:
+            records_by_store[store] = []
+        records_by_store[store].append(record)
+
+    sorted_stores = sorted(records_by_store.keys())
+
+    html_body = f"""
+    <!doctype html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4; }}
+            .container {{ max-width: 800px; margin: 20px auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); overflow: hidden; }}
+            .header {{ background-color: #003865; color: #ffffff; padding: 20px; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 24px; }}
+            .header p {{ margin: 5px 0 0; font-size: 16px; }}
+            .store-section {{ margin: 20px; padding: 20px; border: 1px solid #dddddd; border-radius: 8px; }}
+            .store-title {{ color: #0058A7; font-size: 22px; margin-bottom: 15px; border-bottom: 2px solid #0058A7; padding-bottom: 10px; }}
+            .summary-table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
+            .summary-table th, .summary-table td {{ padding: 12px; text-align: left; border-bottom: 1px solid #eeeeee; }}
+            .summary-table th {{ background-color: #f8f8f8; font-weight: 600; color: #333; }}
+            .summary-table .label {{ font-weight: bold; color: #555; }}
+            .summary-table .value {{ text-align: right; font-family: 'Courier New', Courier, monospace; font-size: 16px; }}
+            .total-row td {{ font-weight: bold; background-color: #f2f2f2; font-size: 18px; color: #003865; }}
+            .cash-detail {{ margin-top: 15px; padding-left: 20px; border-left: 3px solid #FFC300; }}
+            .cash-detail p {{ margin: 5px 0; }}
+            .footer {{ background-color: #333333; color: #cccccc; text-align: center; padding: 15px; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Resumen Gerencial de Cuadre de Caja</h1>
+                <p>Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}</p>
+                <p><strong>Tienda(s):</strong> {selected_store}</p>
+            </div>
+    """
+
+    grand_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
+
+    for store_name in sorted_stores:
+        store_records = records_by_store[store_name]
+        store_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
+        cash_details_html = ""
+
+        for record in store_records:
+            store_totals['venta_total'] += float(record.get('Venta_Total_Dia', 0))
+            store_totals['diferencia'] += float(record.get('Diferencia', 0))
+
+            tarjetas = json.loads(record.get('Tarjetas', '[]'))
+            consignaciones = json.loads(record.get('Consignaciones', '[]'))
+            gastos = json.loads(record.get('Gastos', '[]'))
+            efectivo_movs = json.loads(record.get('Efectivo', '[]'))
+
+            sub_t = sum(float(t.get('Valor', 0)) for t in tarjetas)
+            sub_c = sum(float(c.get('Valor', 0)) for c in consignaciones)
+            sub_g = sum(float(g.get('Valor', 0)) for g in gastos)
+            sub_e = sum(float(e.get('Valor', 0)) for e in efectivo_movs)
+
+            store_totals['tarjetas'] += sub_t
+            store_totals['consignaciones'] += sub_c
+            store_totals['gastos'] += sub_g
+            store_totals['efectivo'] += sub_e
+
+            for mov in efectivo_movs:
+                valor = float(mov.get('Valor', 0))
+                destino = mov.get('Destino/Tercero (Opcional)', 'N/A')
+                tipo = mov.get('Tipo', 'Movimiento de Efectivo')
+                if valor > 0:
+                    if destino != "N/A":
+                        cash_details_html += f"<p> • Se entregaron <strong>${valor:,.0f}</strong> a <strong>{destino}</strong> ({tipo}).</p>"
+                    else:
+                        cash_details_html += f"<p> • Salida de efectivo ({tipo}) por <strong>${valor:,.0f}</strong> a caja general/transportadora.</p>"
+        
+        for key in grand_totals:
+            grand_totals[key] += store_totals[key]
+
+        html_body += f"""
+        <div class="store-section">
+            <h2 class="store-title">{store_name}</h2>
+            <table class="summary-table">
+                <tr><td class="label">Venta Total (Sistema)</td><td class="value">${store_totals['venta_total']:,.0f}</td></tr>
+                <tr><td class="label">Total Tarjetas</td><td class="value">${store_totals['tarjetas']:,.0f}</td></tr>
+                <tr><td class="label">Total Consignaciones</td><td class="value">${store_totals['consignaciones']:,.0f}</td></tr>
+                <tr><td class="label">Total Gastos</td><td class="value">${store_totals['gastos']:,.0f}</td></tr>
+                <tr><td class="label">Total Movimientos de Efectivo</td><td class="value">${store_totals['efectivo']:,.0f}</td></tr>
+                <tr class="total-row"><td class="label">Diferencia en Cuadre</td><td class="value" style="color: {'red' if store_totals['diferencia'] != 0 else 'green'};">${store_totals['diferencia']:,.0f}</td></tr>
+            </table>
+            """
+        if cash_details_html:
+            html_body += f"""
+            <div class="cash-detail">
+                <h4>Detalle del Efectivo:</h4>
+                {cash_details_html}
+            </div>
+            """
+        html_body += "</div>"
+
+    if selected_store == "Todas las Tiendas" and len(sorted_stores) > 1:
+        html_body += f"""
+        <div class="store-section" style="background-color: #e6f7ff;">
+            <h2 class="store-title" style="color: #003865; border-color: #003865;">Resumen General Consolidado</h2>
+            <table class="summary-table">
+                <tr><td class="label">Venta Total (Sistema)</td><td class="value">${grand_totals['venta_total']:,.0f}</td></tr>
+                <tr><td class="label">Total Tarjetas</td><td class="value">${grand_totals['tarjetas']:,.0f}</td></tr>
+                <tr><td class="label">Total Consignaciones</td><td class="value">${grand_totals['consignaciones']:,.0f}</td></tr>
+                <tr><td class="label">Total Gastos</td><td class="value">${grand_totals['gastos']:,.0f}</td></tr>
+                <tr><td class="label">Total Movimientos de Efectivo</td><td class="value">${grand_totals['efectivo']:,.0f}</td></tr>
+                <tr class="total-row"><td class="label">Diferencia Total en Cuadres</td><td class="value" style="color: {'red' if grand_totals['diferencia'] != 0 else 'green'};">${grand_totals['diferencia']:,.0f}</td></tr>
+            </table>
+        </div>
+        """
+
+    html_body += """
+            <div class="footer">
+                <p>Este es un correo generado automáticamente por el Sistema de Cuadre Diario de Caja.</p>
+                <p>&copy; 2025 - Todos los derechos reservados.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html_body
+
+def send_summary_email(registros_ws, start_date, end_date, selected_store, recipient_email):
+    """
+    Filtra los datos, genera el resumen y lo envía por correo electrónico.
+    """
+    st.info("Preparando y enviando resumen gerencial...")
+
+    try:
+        sender_email = st.secrets["email_credentials"]["sender_email"]
+        sender_password = st.secrets["email_credentials"]["sender_password"]
+    except (KeyError, TypeError):
+        st.error("Credenciales de correo no encontradas o mal configuradas en los 'secrets' de Streamlit.")
+        st.warning("Asegúrese de tener una sección [email_credentials] con 'sender_email' y 'sender_password'.")
+        return
+
+    try:
+        all_records = registros_ws.get_all_records()
+        date_filtered_records = [
+            r for r in all_records
+            if start_date <= datetime.strptime(r.get('Fecha', '01/01/1900'), '%d/%m/%Y').date() <= end_date
+        ]
+        if selected_store == "Todas las Tiendas":
+            filtered_records = date_filtered_records
+        else:
+            filtered_records = [r for r in date_filtered_records if str(r.get('Tienda', '')).strip() == selected_store]
+    except Exception as e:
+        st.error(f"Error al filtrar los registros para el correo: {e}")
+        return
+
+    if not filtered_records:
+        st.warning("No se encontraron registros en el rango de fechas y tienda seleccionados para enviar el correo.")
+        return
+
+    email_body = generate_summary_email_body(filtered_records, start_date, end_date, selected_store)
+    subject = f"Resumen de Cuadre de Caja - {selected_store} - {start_date.strftime('%d/%m')} a {end_date.strftime('%d/%m')}"
+
+    try:
+        yag = yagmail.SMTP(sender_email, sender_password)
+        yag.send(
+            to=recipient_email,
+            subject=subject,
+            contents=email_body
+        )
+        st.success(f"¡Resumen gerencial enviado exitosamente a {recipient_email}!")
+    except smtplib.SMTPAuthenticationError:
+        st.error("Error de autenticación con el servidor de correo. Verifique el email y la contraseña de aplicación en los 'secrets'.")
+    except Exception as e:
+        st.error(f"Ocurrió un error inesperado al enviar el correo: {e}")
+
+# --- FIN DE NUEVAS FUNCIONES PARA EL CORREO ---
+
+
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
 def initialize_session_state():
     """Inicializa el estado de la sesión para almacenar datos del formulario."""
@@ -840,7 +1027,7 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
     st.divider()
     
     # --- Contenedores para botones de generación ---
-    b1, b2 = st.columns(2)
+    b1, b2, b3 = st.columns(3)
 
     with b1:
         if st.button("📄 Generar Archivo TXT", use_container_width=True, type="primary"):
@@ -870,11 +1057,22 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
                     )
                     st.success("Reporte Excel generado.")
 
+    # --- NUEVA SECCIÓN PARA ENVÍO DE CORREO ---
+    with b3:
+        with st.form("email_form"):
+            recipient_email = st.text_input("Email del Gerente", placeholder="ejemplo@dominio.com")
+            submitted = st.form_submit_button("📧 Enviar Resumen Gerencial", use_container_width=True)
+            
+            if submitted:
+                if recipient_email and "@" in recipient_email:
+                    send_summary_email(registros_ws, start_date, end_date, selected_store, recipient_email)
+                else:
+                    st.warning("Por favor, ingrese una dirección de correo válida.")
+
 
 # --- 7. FLUJO PRINCIPAL DE LA APLICACIÓN ---
 def main():
     """Función principal que ejecuta la aplicación Streamlit."""
-    # La inicialización de estado se movió al bloque principal
     st.title("CUADRE DIARIO DE CAJA")
 
     worksheets = connect_to_gsheet()
