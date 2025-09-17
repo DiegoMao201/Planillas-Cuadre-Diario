@@ -469,14 +469,14 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     details_html = ""
     for tienda, records_list in grouped_records.items():
         details_html += f"""
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 5px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 0;">
             <tr>
                 <td align="left" style="background-color: #0077b6; padding: 10px; border-radius: 8px 8px 0 0;">
                     <h3 style="color: #ffffff; font-size: 16px; margin: 0; padding-left: 5px;">Tienda: {tienda}</h3>
                 </td>
             </tr>
             <tr>
-                <td style="border: 1px solid #e9ecef; border-top: none; padding: 12px; border-radius: 0 0 8px 8px;">
+                <td style="border: 1px solid #e9ecef; border-top: none; padding: 12px 0 0 0; border-radius: 0 0 8px 8px;">
                     <table border="0" cellpadding="0" cellspacing="0" width="100%">
         """
         
@@ -503,7 +503,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
             details_html += f"""
             <tr>
                 <td colspan="2">
-                    <div style="background-color:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; margin-top:8px;">
+                    <div style="background-color:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; margin:0 12px 12px 12px;">
                         <h4 style="font-size:15px; font-weight:600; margin:0 0 8px 0; color:#333;">Resumen del día: {fecha}</h4>
                         <table border="0" cellpadding="0" cellspacing="0" width="100%">
                             <tr>
@@ -542,9 +542,9 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         details_html += """
                         </table>
                     </td>
-            </tr>
-        </table>
-        """
+                </tr>
+            </table>
+            """
 
     # HTML principal del correo con el diseño compacto y corregido
     html_body = f"""<!DOCTYPE html>
@@ -563,7 +563,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
 </head>
 <body style="margin: 0; padding: 0; background-color: #f8f9fa;">
     <center style="width: 100%; background-color: #f8f9fa;">
-        <div style="background-color:#f8f9fa; max-width:600px; margin:0 auto; padding: 20px 0;">
+        <div style="background-color:#f8f9fa; max-width:600px; margin:0 auto; padding: 0;">
             <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 12px; border: 1px solid #dee2e6; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
                 <tr>
                     <td align="center" style="background: linear-gradient(90deg, #023e8a, #0077b6); padding: 25px; border-radius: 12px 12px 0 0;">
