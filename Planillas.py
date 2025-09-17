@@ -456,6 +456,7 @@ def format_cop(value):
 def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
     Genera un cuerpo de correo HTML profesional y visualmente atractivo.
+    CORREGIDO para máxima compatibilidad y diseño profesional.
     """
     # --- 1. CÁLCULO DE TOTALES CONSOLIDADOS DEL PERIODO ---
     total_ingresos = 0
@@ -474,7 +475,6 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     total_egresos = total_gastos + total_retiros_y_consignaciones
     balance_neto = total_ingresos - total_egresos
     total_ventas_efectivo = total_ingresos - total_ventas_tarjeta
-    saldo_final_periodo = balance_neto
     
     # --- 3. FORMATEO DE FECHAS Y TEXTOS ---
     meses = {
@@ -491,97 +491,95 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     
     report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
     
-    balance_color_class = "positive" if balance_neto >= 0 else "negative"
+    balance_color = "#10b981" if balance_neto >= 0 else "#ef4444"
     balance_display_text = "Resultado positivo" if balance_neto >= 0 else "Resultado negativo"
-    balance_sign = "" if balance_neto < 0 else "" # El signo negativo ya lo pone el número
 
     # --- 4. CONSTRUCCIÓN DEL HTML CON F-STRINGS ---
+    # NOTA: Este HTML está diseñado para ser robusto en clientes de correo. Usa tablas para el layout.
     html_body = f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cuadre Diario de Caja</title>
+        <title>Resumen Gerencial de Caja</title>
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-            body {{ font-family: 'Inter', sans-serif; background-color: #f3f4f6; padding: 20px; margin: 0; }}
-            .email-container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); overflow: hidden; border: 1px solid #e5e7eb; }}
-            .header {{ background: #111827; padding: 32px; text-align: center; color: white; }}
-            .header h1 {{ font-size: 26px; font-weight: 700; margin: 0 0 8px 0; }}
-            .header .subtitle {{ font-size: 16px; font-weight: 400; color: #d1d5db; margin: 0; }}
-            .date-badge {{ background: rgba(255, 255, 255, 0.1); color: #f9fafb; padding: 6px 16px; border-radius: 20px; font-size: 14px; font-weight: 500; margin-top: 16px; display: inline-block; }}
-            .content {{ padding: 32px; }}
-            .summary-grid {{ display: table; width: 100%; border-spacing: 16px 0; margin: -8px; margin-bottom: 24px; }}
-            .summary-card {{ display: table-cell; width: 50%; background-color: #f9fafb; border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb; }}
-            .summary-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .summary-card .amount {{ color: #111827; font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }}
-            .summary-card .change {{ font-size: 12px; font-weight: 500; color: #6b7280; }}
-            .positive {{ color: #10b981 !important; }}
-            .negative {{ color: #ef4444 !important; }}
-            .details-section {{ margin-bottom: 24px; }}
-            .details-section h2 {{ color: #111827; font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #f3f4f6; }}
-            .detail-row {{ display: table; width: 100%; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }}
-            .detail-row:last-child {{ border-bottom: none; }}
-            .detail-label, .detail-value {{ display: table-cell; vertical-align: middle; font-size: 14px; }}
-            .detail-label {{ color: #6b7280; font-weight: 500; }}
-            .detail-value {{ color: #111827; font-weight: 600; text-align: right; }}
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+            body {{ margin: 0; padding: 0; background-color: #f3f4f6; font-family: 'Inter', sans-serif; }}
+            .email-container {{ max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }}
+            .header {{ background-color: #111827; padding: 24px 32px; text-align: center; color: white; }}
+            .header h1 {{ font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }}
+            .header .subtitle {{ font-size: 15px; font-weight: 400; color: #d1d5db; margin: 0; }}
+            .date-badge {{ background-color: rgba(255, 255, 255, 0.1); color: #f9fafb; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 500; margin-top: 16px; display: inline-block; }}
+            .content {{ padding: 20px 32px 32px 32px; }}
+            .summary-card {{ background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; text-align: center; }}
+            .summary-card h3 {{ color: #4b5563; font-size: 13px; font-weight: 600; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
+            .summary-card .amount {{ color: #111827; font-size: 28px; font-weight: 700; margin: 0; }}
+            .details-section h2 {{ color: #111827; font-size: 18px; font-weight: 600; margin: 0 0 16px 0; padding-bottom: 8px; border-bottom: 2px solid #f3f4f6; }}
+            .detail-row {{ padding: 12px 0; border-bottom: 1px solid #e5e7eb; }}
+            .detail-label {{ color: #6b7280; font-size: 14px; }}
+            .detail-value {{ color: #111827; font-size: 15px; font-weight: 600; text-align: right; }}
             .final-balance-card {{ background-color: #f9fafb; border-radius: 12px; padding: 24px; text-align: center; border: 1px solid #e5e7eb; }}
-            .final-balance-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 500; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .final-balance-card .amount {{ font-size: 32px; font-weight: 700; margin: 0 0 4px 0; }}
-            .footer {{ background: #f3f4f6; padding: 24px; text-align: center; }}
-            .footer p {{ color: #6b7280; font-size: 12px; margin: 0 0 8px 0; }}
-            .footer .company {{ color: #111827; font-weight: 600; font-size: 14px; }}
+            .final-balance-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 600; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
+            .footer {{ padding: 24px; text-align: center; font-size: 12px; color: #6b7280; }}
         </style>
     </head>
     <body>
         <div class="email-container">
             <div class="header">
-                <h1>Cuadre de Caja Consolidado</h1>
+                <h1>Resumen Gerencial de Caja</h1>
                 <p class="subtitle">{subtitle_text}</p>
                 <div class="date-badge">{report_date_str}</div>
             </div>
             <div class="content">
-                <div class="summary-grid">
-                    <div class="summary-card">
-                        <h3>Ingresos del Periodo</h3>
-                        <div class="amount">{format_cop(total_ingresos)}</div>
-                        <div class="change">Total ventas (sistema)</div>
-                    </div>
-                    <div class="summary-card">
-                        <h3>Egresos del Periodo</h3>
-                        <div class="amount">{format_cop(total_egresos)}</div>
-                        <div class="change">Gastos, consignaciones y retiros</div>
-                    </div>
-                </div>
+                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 24px;">
+                    <tr>
+                        <td width="48%" style="padding-right: 8px;">
+                            <div class="summary-card">
+                                <h3>Ingresos Totales</h3>
+                                <p class="amount">{format_cop(total_ingresos)}</p>
+                            </div>
+                        </td>
+                        <td width="48%" style="padding-left: 8px;">
+                            <div class="summary-card">
+                                <h3>Egresos Totales</h3>
+                                <p class="amount">{format_cop(total_egresos)}</p>
+                            </div>
+                        </td>
+                    </tr>
+                </table>
+
                 <div class="details-section">
                     <h2>Detalle de Movimientos</h2>
-                    <div class="detail-row">
-                        <span class="detail-label">(+) Ingresos por Venta en Efectivo</span>
-                        <span class="detail-value">{format_cop(total_ventas_efectivo)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">(+) Ingresos por Venta con Tarjeta</span>
-                        <span class="detail-value">{format_cop(total_ventas_tarjeta)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">(-) Gastos Operativos</span>
-                        <span class="detail-value negative">-{format_cop(total_gastos)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="detail-label">(-) Retiros y Consignaciones</span>
-                        <span class="detail-value negative">-{format_cop(total_retiros_y_consignaciones)}</span>
-                    </div>
+                    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr class="detail-row">
+                            <td class="detail-label">(+) Venta en Efectivo</td>
+                            <td class="detail-value">{format_cop(total_ventas_efectivo)}</td>
+                        </tr>
+                        <tr class="detail-row">
+                            <td class="detail-label">(+) Venta con Tarjeta</td>
+                            <td class="detail-value">{format_cop(total_ventas_tarjeta)}</td>
+                        </tr>
+                        <tr class="detail-row">
+                            <td class="detail-label" style="color: #ef4444;">(-) Gastos Operativos</td>
+                            <td class="detail-value" style="color: #ef4444;">-{format_cop(total_gastos)}</td>
+                        </tr>
+                        <tr class="detail-row" style="border-bottom: none;">
+                            <td class="detail-label" style="color: #ef4444;">(-) Retiros y Consignaciones</td>
+                            <td class="detail-value" style="color: #ef4444;">-{format_cop(total_retiros_y_consignaciones)}</td>
+                        </tr>
+                    </table>
                 </div>
-                <div class="final-balance-card">
+
+                <div class="final-balance-card" style="margin-top: 24px;">
                     <h3>Balance Neto del Periodo</h3>
-                    <div class="amount {balance_color_class}">{format_cop(balance_neto)}</div>
-                    <div class="change {balance_color_class}">{balance_display_text}</div>
+                    <p class="amount" style="font-size: 32px; margin: 0 0 4px 0; color: {balance_color};">{format_cop(balance_neto)}</p>
+                    <p style="font-size: 14px; font-weight: 500; margin: 0; color: {balance_color};">{balance_display_text}</p>
                 </div>
             </div>
             <div class="footer">
-                <p>Este reporte fue generado automáticamente el <span>{report_time_str}</span></p>
-                <p class="company">Sistema de Gestión Financiera</p>
+                <p>Este reporte fue generado automáticamente el {report_time_str}.</p>
+                <p style="font-weight: 600; color: #111827;">Sistema de Gestión Financiera</p>
             </div>
         </div>
     </body>
@@ -931,7 +929,7 @@ def display_summary_and_save(worksheets):
                     json.dumps(st.session_state.tarjetas), json.dumps(st.session_state.consignaciones),
                     json.dumps(st.session_state.gastos), json.dumps(st.session_state.efectivo),
                     diferencia, datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                    "",
+                    "", 
                     consecutivo_global_doc
                 ]
 
