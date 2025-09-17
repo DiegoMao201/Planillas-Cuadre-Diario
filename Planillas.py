@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: Cuadre_Diario_Caja_Final.py
-# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional)
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -436,7 +436,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     return output.getvalue()
 
 # ======================================================================================
-# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO) ---
+# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO CORREGIDO) ---
 # ======================================================================================
 
 def format_cop(value):
@@ -491,100 +491,205 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     
     report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
     
-    balance_color = "#10b981" if balance_neto >= 0 else "#ef4444"
-    balance_display_text = "Resultado positivo" if balance_neto >= 0 else "Resultado negativo"
-
-    # --- 4. CONSTRUCCIÓN DEL HTML CON F-STRINGS ---
+    # --- 4. CONSTRUCCIÓN DEL HTML ---
     # NOTA: Este HTML está diseñado para ser robusto en clientes de correo. Usa tablas para el layout.
+    # Se eliminó la indentación de Python dentro del string para evitar errores de parseo CSS.
     html_body = f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Resumen Gerencial de Caja</title>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-            body {{ margin: 0; padding: 0; background-color: #f3f4f6; font-family: 'Inter', sans-serif; }}
-            .email-container {{ max-width: 600px; margin: 20px auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }}
-            .header {{ background-color: #111827; padding: 24px 32px; text-align: center; color: white; }}
-            .header h1 {{ font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }}
-            .header .subtitle {{ font-size: 15px; font-weight: 400; color: #d1d5db; margin: 0; }}
-            .date-badge {{ background-color: rgba(255, 255, 255, 0.1); color: #f9fafb; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 500; margin-top: 16px; display: inline-block; }}
-            .content {{ padding: 20px 32px 32px 32px; }}
-            .summary-card {{ background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; text-align: center; }}
-            .summary-card h3 {{ color: #4b5563; font-size: 13px; font-weight: 600; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .summary-card .amount {{ color: #111827; font-size: 28px; font-weight: 700; margin: 0; }}
-            .details-section h2 {{ color: #111827; font-size: 18px; font-weight: 600; margin: 0 0 16px 0; padding-bottom: 8px; border-bottom: 2px solid #f3f4f6; }}
-            .detail-row {{ padding: 12px 0; border-bottom: 1px solid #e5e7eb; }}
-            .detail-label {{ color: #6b7280; font-size: 14px; }}
-            .detail-value {{ color: #111827; font-size: 15px; font-weight: 600; text-align: right; }}
-            .final-balance-card {{ background-color: #f9fafb; border-radius: 12px; padding: 24px; text-align: center; border: 1px solid #e5e7eb; }}
-            .final-balance-card h3 {{ color: #4b5563; font-size: 14px; font-weight: 600; margin: 0 0 8px 0; text-transform: uppercase; letter-spacing: 0.5px; }}
-            .footer {{ padding: 24px; text-align: center; font-size: 12px; color: #6b7280; }}
-        </style>
-    </head>
-    <body>
-        <div class="email-container">
-            <div class="header">
-                <h1>Resumen Gerencial de Caja</h1>
-                <p class="subtitle">{subtitle_text}</p>
-                <div class="date-badge">{report_date_str}</div>
-            </div>
-            <div class="content">
-                <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 24px;">
-                    <tr>
-                        <td width="48%" style="padding-right: 8px;">
-                            <div class="summary-card">
-                                <h3>Ingresos Totales</h3>
-                                <p class="amount">{format_cop(total_ingresos)}</p>
-                            </div>
-                        </td>
-                        <td width="48%" style="padding-left: 8px;">
-                            <div class="summary-card">
-                                <h3>Egresos Totales</h3>
-                                <p class="amount">{format_cop(total_egresos)}</p>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resumen Gerencial de Caja</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+body {{
+    margin: 0;
+    padding: 0;
+    background-color: #f8f9fa;
+    font-family: 'Roboto', sans-serif;
+}}
+.email-container {{
+    max-width: 680px;
+    margin: 20px auto;
+    background-color: #ffffff;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #dee2e6;
+}}
+.header {{
+    background: linear-gradient(90deg, #023e8a, #0077b6);
+    padding: 32px;
+    text-align: center;
+    color: white;
+}}
+.header h1 {{
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+}}
+.header .subtitle {{
+    font-size: 16px;
+    font-weight: 400;
+    color: #caf0f8;
+    margin: 0;
+}}
+.date-badge {{
+    background-color: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    margin-top: 20px;
+    display: inline-block;
+}}
+.content {{
+    padding: 32px;
+}}
+.kpi-card {{
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+}}
+.kpi-card h3 {{
+    color: #495057;
+    font-size: 14px;
+    font-weight: 500;
+    margin: 0 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}}
+.kpi-card .amount {{
+    color: #212529;
+    font-size: 32px;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.2;
+}}
+.details-section h2 {{
+    color: #023e8a;
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 16px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #0077b6;
+}}
+.detail-table {{
+    width: 100%;
+    border-collapse: collapse;
+}}
+.detail-table tr {{
+    border-bottom: 1px solid #e9ecef;
+}}
+.detail-table tr:last-child {{
+    border-bottom: none;
+}}
+.detail-table td {{
+    padding: 16px 4px;
+    font-size: 15px;
+}}
+.detail-label {{
+    color: #6c757d;
+}}
+.detail-value {{
+    color: #212529;
+    font-weight: 500;
+    text-align: right;
+}}
+.detail-value.positive {{ color: #007200; }}
+.detail-value.negative {{ color: #d00000; }}
+.final-balance-card {{
+    background-color: #023e8a;
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    color: #ffffff;
+}}
+.final-balance-card h3 {{
+    font-size: 16px;
+    font-weight: 500;
+    margin: 0 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.8;
+}}
+.final-balance-card .amount {{
+    font-size: 40px;
+    font-weight: 700;
+    margin: 0 0 4px 0;
+}}
+.footer {{
+    padding: 24px;
+    text-align: center;
+    font-size: 12px;
+    color: #6c757d;
+    background-color: #f1f3f5;
+}}
+</style>
+</head>
+<body>
+<div class="email-container">
+    <div class="header">
+        <h1>Resumen Gerencial de Caja</h1>
+        <p class="subtitle">{subtitle_text}</p>
+        <div class="date-badge">{report_date_str}</div>
+    </div>
+    <div class="content">
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 32px;">
+            <tr>
+                <td width="49%" style="padding-right: 10px;">
+                    <div class="kpi-card">
+                        <h3>📈 Ingresos Totales</h3>
+                        <p class="amount">{format_cop(total_ingresos)}</p>
+                    </div>
+                </td>
+                <td width="49%" style="padding-left: 10px;">
+                    <div class="kpi-card">
+                        <h3>📉 Egresos Totales</h3>
+                        <p class="amount">{format_cop(total_egresos)}</p>
+                    </div>
+                </td>
+            </tr>
+        </table>
 
-                <div class="details-section">
-                    <h2>Detalle de Movimientos</h2>
-                    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
-                        <tr class="detail-row">
-                            <td class="detail-label">(+) Venta en Efectivo</td>
-                            <td class="detail-value">{format_cop(total_ventas_efectivo)}</td>
-                        </tr>
-                        <tr class="detail-row">
-                            <td class="detail-label">(+) Venta con Tarjeta</td>
-                            <td class="detail-value">{format_cop(total_ventas_tarjeta)}</td>
-                        </tr>
-                        <tr class="detail-row">
-                            <td class="detail-label" style="color: #ef4444;">(-) Gastos Operativos</td>
-                            <td class="detail-value" style="color: #ef4444;">-{format_cop(total_gastos)}</td>
-                        </tr>
-                        <tr class="detail-row" style="border-bottom: none;">
-                            <td class="detail-label" style="color: #ef4444;">(-) Retiros y Consignaciones</td>
-                            <td class="detail-value" style="color: #ef4444;">-{format_cop(total_retiros_y_consignaciones)}</td>
-                        </tr>
-                    </table>
-                </div>
-
-                <div class="final-balance-card" style="margin-top: 24px;">
-                    <h3>Balance Neto del Periodo</h3>
-                    <p class="amount" style="font-size: 32px; margin: 0 0 4px 0; color: {balance_color};">{format_cop(balance_neto)}</p>
-                    <p style="font-size: 14px; font-weight: 500; margin: 0; color: {balance_color};">{balance_display_text}</p>
-                </div>
-            </div>
-            <div class="footer">
-                <p>Este reporte fue generado automáticamente el {report_time_str}.</p>
-                <p style="font-weight: 600; color: #111827;">Sistema de Gestión Financiera</p>
-            </div>
+        <div class="details-section">
+            <h2>Detalle de Movimientos</h2>
+            <table class="detail-table" role="presentation" border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td class="detail-label">Ventas en Efectivo</td>
+                    <td class="detail-value positive">{format_cop(total_ventas_efectivo)}</td>
+                </tr>
+                <tr>
+                    <td class="detail-label">Ventas con Tarjeta</td>
+                    <td class="detail-value positive">{format_cop(total_ventas_tarjeta)}</td>
+                </tr>
+                <tr>
+                    <td class="detail-label">Gastos Operativos</td>
+                    <td class="detail-value negative">-{format_cop(total_gastos)}</td>
+                </tr>
+                <tr>
+                    <td class="detail-label">Retiros y Consignaciones</td>
+                    <td class="detail-value negative">-{format_cop(total_retiros_y_consignaciones)}</td>
+                </tr>
+            </table>
         </div>
-    </body>
-    </html>
-    """
+
+        <div class="final-balance-card" style="margin-top: 32px;">
+            <h3>Balance Neto del Periodo</h3>
+            <p class="amount">{format_cop(balance_neto)}</p>
+        </div>
+    </div>
+    <div class="footer">
+        <p>Este reporte fue generado automáticamente el {report_time_str}.<br>
+        <strong>Sistema de Gestión Financiera</strong></p>
+    </div>
+</div>
+</body>
+</html>
+"""
     return html_body
 
 
