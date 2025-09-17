@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: Cuadre_Diario_Caja_Final.py
-# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V4)
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V5)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -22,27 +22,21 @@ def check_password():
     """
     Muestra un formulario de login y retorna True si la contraseña es correcta.
     """
-    # Si el usuario ya está autenticado en la sesión actual, no se le vuelve a pedir.
     if st.session_state.get("authenticated", False):
         return True
 
     st.header("🔐 Autenticación Requerida")
     st.write("Por favor, ingrese la contraseña para acceder al formulario.")
 
-    # Se crea un formulario para el campo de contraseña y el botón.
     with st.form("login"):
         password = st.text_input("Contraseña", type="password")
         submitted = st.form_submit_button("Ingresar")
 
         if submitted:
-            # Se encripta la contraseña ingresada por el usuario para compararla.
             hashed_input = hashlib.sha256(password.encode()).hexdigest()
-            # Se obtiene la contraseña correcta (ya encriptada) desde los secrets.
             correct_hashed_password = st.secrets["credentials"]["hashed_password"]
             
-            # Se comparan ambas contraseñas encriptadas.
             if hashed_input == correct_hashed_password:
-                # Si es correcta, se guarda el estado de autenticación y se recarga la app.
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
@@ -69,7 +63,6 @@ def connect_to_gsheet():
         config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
         consecutivos_ws = sheet.worksheet("Consecutivos")
         
-        # CONEXIÓN A LA HOJA DE CONSECUTIVO GLOBAL
         global_consecutivo_ws = sheet.worksheet("GlobalConsecutivo")
         
         return registros_ws, config_ws, consecutivos_ws, global_consecutivo_ws
@@ -446,16 +439,14 @@ def format_cop(value):
     """
     if not isinstance(value, (int, float)):
         return "$ 0"
-    # Formatea el número con comas como separadores de miles y sin decimales.
     formatted_value = f"{value:,.0f}"
-    # Reemplaza las comas por puntos, como es común en Colombia.
     formatted_value = formatted_value.replace(",", ".")
     return f"$ {formatted_value}"
 
 def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
-    Genera un cuerpo de correo HTML profesional y visualmente atractivo, 
-    usando un diseño más compacto y horizontal para la tarjeta principal.
+    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
+    El diseño es más compacto y muestra los totales por categoría.
     """
     if start_date == end_date:
         report_date_str = f"Reporte del día: {start_date.strftime('%d/%m/%Y')}"
@@ -499,11 +490,13 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
             
         for fecha, daily_records in date_grouped_records.items():
             venta_total_sistema = sum(float(r.get('Venta_Total_Dia', 0)) for r in daily_records)
-            total_ventas_tarjeta = sum(sum(float(t.get('Valor', 0)) for t in json.loads(r.get('Tarjetas', '[]'))) for r in daily_records)
-            total_gastos = sum(sum(float(g.get('Valor', 0)) for g in json.loads(r.get('Gastos', '[]'))) for r in daily_records)
-            total_retiros_y_consignaciones = sum(sum(float(c.get('Valor', 0)) for c in json.loads(r.get('Consignaciones', '[]'))) for r in daily_records) + sum(sum(float(e.get('Valor', 0)) for e in json.loads(r.get('Efectivo', '[]'))) for r in daily_records)
             
-            total_desglose = total_ventas_tarjeta + total_gastos + total_retiros_y_consignaciones
+            total_tarjetas = sum(sum(float(t.get('Valor', 0)) for t in json.loads(r.get('Tarjetas', '[]'))) for r in daily_records)
+            total_consignaciones = sum(sum(float(c.get('Valor', 0)) for c in json.loads(r.get('Consignaciones', '[]'))) for r in daily_records)
+            total_gastos = sum(sum(float(g.get('Valor', 0)) for g in json.loads(r.get('Gastos', '[]'))) for r in daily_records)
+            total_efectivo = sum(sum(float(e.get('Valor', 0)) for e in json.loads(r.get('Efectivo', '[]'))) for r in daily_records)
+            
+            total_desglose = total_tarjetas + total_consignaciones + total_gastos + total_efectivo
             diferencia = venta_total_sistema - total_desglose
             
             # Subcard dentro del detalle de movimientos
@@ -518,8 +511,24 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
                                 <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#007200;">{format_cop(venta_total_sistema)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">💳 Total Desglose</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#023e8a;">{format_cop(total_desglose)}</td>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">💳 Total Tarjetas</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_tarjetas)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">🏦 Total Consignaciones</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_consignaciones)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">💸 Total Gastos</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_gastos)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555;">💵 Total Efectivo</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_efectivo)}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding:5px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Total Desglose</td>
+                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#023e8a; border-top:1px dashed #ccc;">{format_cop(total_desglose)}</td>
                             </tr>
                             <tr>
                                 <td style="padding:5px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Diferencia</td>
@@ -537,7 +546,7 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
         </table>
         """
 
-    # HTML principal del correo con el diseño compacto
+    # HTML principal del correo con el diseño compacto y corregido
     html_body = f"""<!DOCTYPE html>
 <html lang="es" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -638,7 +647,6 @@ def send_summary_email(registros_ws, start_date, end_date, selected_store, recip
 # ======================================================================================
 # --- FIN DE LA SECCIÓN DE CORREO ELECTRÓNICO ---
 # ======================================================================================
-
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
 def initialize_session_state():
