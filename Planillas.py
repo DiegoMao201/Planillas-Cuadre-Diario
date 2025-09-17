@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: Cuadre_Diario_Caja_Final.py
-# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V5)
+# VERSIÓN: Con Reporte Gerencial por Correo (Diseño Profesional Corregido V6 - Compacto)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -429,7 +429,7 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     return output.getvalue()
 
 # ======================================================================================
-# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (NUEVO DISEÑO MEJORADO) ---
+# --- INICIO DE LA SECCIÓN DE CORREO ELECTRÓNICO (DISEÑO COMPACTO MEJORADO) ---
 # ======================================================================================
 
 def format_cop(value):
@@ -469,14 +469,14 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
     details_html = ""
     for tienda, records_list in grouped_records.items():
         details_html += f"""
-        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 20px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 15px;">
             <tr>
                 <td align="left" style="background-color: #0077b6; padding: 10px; border-radius: 8px 8px 0 0;">
                     <h3 style="color: #ffffff; font-size: 16px; margin: 0; padding-left: 5px;">Tienda: {tienda}</h3>
                 </td>
             </tr>
             <tr>
-                <td style="border: 1px solid #e9ecef; border-top: none; padding: 16px; border-radius: 0 0 8px 8px;">
+                <td style="border: 1px solid #e9ecef; border-top: none; padding: 12px; border-radius: 0 0 8px 8px;">
                     <table border="0" cellpadding="0" cellspacing="0" width="100%">
         """
         
@@ -499,49 +499,49 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
             total_desglose = total_tarjetas + total_consignaciones + total_gastos + total_efectivo
             diferencia = venta_total_sistema - total_desglose
             
-            # Subcard dentro del detalle de movimientos
+            # Subcard dentro del detalle de movimientos (CON VALORES AJUSTADOS PARA SER MÁS COMPACTO)
             details_html += f"""
             <tr>
                 <td colspan="2">
-                    <div style="background-color:#fff; border-radius:10px; border:1px solid #e0e0e0; padding:15px; margin-top:15px;">
-                        <h4 style="font-size:16px; font-weight:600; margin:0 0 10px 0; color:#333;">Resumen del día: {fecha}</h4>
+                    <div style="background-color:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; margin-top:8px;">
+                        <h4 style="font-size:15px; font-weight:600; margin:0 0 8px 0; color:#333;">Resumen del día: {fecha}</h4>
                         <table border="0" cellpadding="0" cellspacing="0" width="100%">
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">💰 Venta Total</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#007200;">{format_cop(venta_total_sistema)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555;">💰 Venta Total</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold; color:#007200;">{format_cop(venta_total_sistema)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">💳 Total Tarjetas</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_tarjetas)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555;">💳 Total Tarjetas</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold;">{format_cop(total_tarjetas)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">🏦 Total Consignaciones</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_consignaciones)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555;">🏦 Total Consignaciones</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold;">{format_cop(total_consignaciones)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">💸 Total Gastos</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_gastos)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555;">💸 Total Gastos</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold;">{format_cop(total_gastos)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555;">💵 Total Efectivo</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold;">{format_cop(total_efectivo)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555;">💵 Total Efectivo</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold;">{format_cop(total_efectivo)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Total Desglose</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:#023e8a; border-top:1px dashed #ccc;">{format_cop(total_desglose)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Total Desglose</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold; color:#023e8a; border-top:1px dashed #ccc;">{format_cop(total_desglose)}</td>
                             </tr>
                             <tr>
-                                <td style="padding:5px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Diferencia</td>
-                                <td align="right" style="padding:5px 0; font-size:14px; font-weight:bold; color:{'#00B050' if diferencia == 0 else '#C00000'}; border-top:1px dashed #ccc;">{format_cop(diferencia)}</td>
+                                <td style="padding:4px 0; font-size:14px; color:#555; border-top:1px dashed #ccc;">Diferencia</td>
+                                <td align="right" style="padding:4px 0; font-size:14px; font-weight:bold; color:{'#00B050' if diferencia == 0 else '#C00000'}; border-top:1px dashed #ccc;">{format_cop(diferencia)}</td>
                             </tr>
                         </table>
                     </div>
-                </td>
+                    </td>
             </tr>
             """
         details_html += """
-                    </table>
-                </td>
+                        </table>
+                    </td>
             </tr>
         </table>
         """
@@ -575,8 +575,8 @@ def generate_professional_email_body(records, start_date, end_date, selected_sto
                     </td>
                 </tr>
                 <tr>
-                    <td align="left" style="padding: 24px;">
-                        <h2 style="color: #023e8a; font-size: 18px; font-weight: 700; margin: 0 0 16px 0; padding-bottom: 10px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
+                    <td align="left" style="padding: 20px;">
+                        <h2 style="color: #023e8a; font-size: 18px; font-weight: 700; margin: 0 0 10px 0; padding-bottom: 8px; border-bottom: 2px solid #0077b6;">Detalle de Movimientos</h2>
                         {details_html}
                     </td>
                 </tr>
