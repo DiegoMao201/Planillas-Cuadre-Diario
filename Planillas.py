@@ -12,6 +12,7 @@ from openpyxl.utils import get_column_letter
 import hashlib
 import yagmail
 import smtplib
+import locale
 
 # --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
@@ -431,142 +432,174 @@ def generate_excel_report(registros_ws, start_date, end_date, selected_store):
     
     return output.getvalue()
 
-# --- INICIO DE NUEVA FUNCIÓN MEJORADA: GENERADOR DE CORREO GERENCIAL ---
-def generate_summary_email_body(records, start_date, end_date, selected_store):
+
+# --- INICIO DE LA SECCIÓN MODIFICADA PARA EL CORREO ELECTRÓNICO ---
+
+def format_cop(value):
+    """Formatea un número como moneda colombiana."""
+    try:
+        locale.setlocale(locale.LC_ALL, 'es_CO.UTF-8')
+    except locale.Error:
+        locale.setlocale(locale.LC_ALL, '') # Fallback to default locale
+    return locale.currency(value, symbol=True, grouping=True, international=False).split(",")[0]
+
+
+def generate_professional_email_body(records, start_date, end_date, selected_store):
     """
-    Genera un cuerpo de correo HTML profesional y visualmente atractivo.
+    Genera un cuerpo de correo HTML profesional y visualmente atractivo,
+    basado en la plantilla proporcionada.
     """
-    records_by_store = {}
+    # --- 1. CÁLCULO DE TOTALES CONSOLIDADOS DEL PERIODO ---
+    total_ingresos = 0
+    total_ventas_tarjeta = 0
+    total_gastos = 0
+    # "Retiros" agrupa consignaciones y entregas de efectivo
+    total_retiros_y_consignaciones = 0
+
     for record in records:
-        store = record.get('Tienda', 'Sin Tienda')
-        if store not in records_by_store:
-            records_by_store[store] = []
-        records_by_store[store].append(record)
-
-    sorted_stores = sorted(records_by_store.keys())
+        # Sumar ingresos
+        total_ingresos += float(record.get('Venta_Total_Dia', 0))
+        # Sumar ventas con tarjeta
+        total_ventas_tarjeta += sum(float(t.get('Valor', 0)) for t in json.loads(record.get('Tarjetas', '[]')))
+        # Sumar gastos
+        total_gastos += sum(float(g.get('Valor', 0)) for g in json.loads(record.get('Gastos', '[]')))
+        # Sumar consignaciones y movimientos de efectivo
+        total_retiros_y_consignaciones += sum(float(c.get('Valor', 0)) for c in json.loads(record.get('Consignaciones', '[]')))
+        total_retiros_y_consignaciones += sum(float(e.get('Valor', 0)) for e in json.loads(record.get('Efectivo', '[]')))
+        
+    # --- 2. CÁLCULOS DERIVADOS ---
+    total_egresos = total_gastos + total_retiros_y_consignaciones
+    balance_neto = total_ingresos - total_egresos
     
-    # --- CÁLCULO DE TOTALES ---
-    grand_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
-    store_cards_html = ""
-
-    for store_name in sorted_stores:
-        store_records = records_by_store[store_name]
-        store_totals = {'tarjetas': 0, 'consignaciones': 0, 'gastos': 0, 'efectivo': 0, 'venta_total': 0, 'diferencia': 0}
-        
-        for record in store_records:
-            store_totals['venta_total'] += float(record.get('Venta_Total_Dia', 0))
-            store_totals['diferencia'] += float(record.get('Diferencia', 0))
-            store_totals['tarjetas'] += sum(float(t.get('Valor', 0)) for t in json.loads(record.get('Tarjetas', '[]')))
-            store_totals['consignaciones'] += sum(float(c.get('Valor', 0)) for c in json.loads(record.get('Consignaciones', '[]')))
-            store_totals['gastos'] += sum(float(g.get('Valor', 0)) for g in json.loads(record.get('Gastos', '[]')))
-            store_totals['efectivo'] += sum(float(e.get('Valor', 0)) for e in json.loads(record.get('Efectivo', '[]')))
-        
-        for key in grand_totals:
-            grand_totals[key] += store_totals[key]
-
-        diferencia_color = "#27ae60" if store_totals['diferencia'] == 0 else "#c0392b"
-        diferencia_icon = "" if store_totals['diferencia'] == 0 else "⚠️ "
-
-        store_cards_html += f"""
-        <div class="card">
-            <div class="card-header">
-                <h2>{store_name}</h2>
-            </div>
-            <div class="card-body">
-                <div class="highlight-section">
-                    <p class="highlight-label">Venta Total (Sistema)</p>
-                    <p class="highlight-value">${store_totals['venta_total']:,.0f}</p>
-                </div>
-                <table class="details-table">
-                    <tr><td>Total Tarjetas</td><td class="amount">${store_totals['tarjetas']:,.0f}</td></tr>
-                    <tr><td>Total Consignaciones</td><td class="amount">${store_totals['consignaciones']:,.0f}</td></tr>
-                    <tr><td>Total Gastos</td><td class="amount">${store_totals['gastos']:,.0f}</td></tr>
-                    <tr><td>Total Movimientos de Efectivo</td><td class="amount">${store_totals['efectivo']:,.0f}</td></tr>
-                </table>
-                <div class="summary-section" style="background-color: {'#e8f8f5' if store_totals['diferencia'] == 0 else '#fdedec'};">
-                    <p class="summary-label">{diferencia_icon}Diferencia en Cuadre</p>
-                    <p class="summary-value" style="color: {diferencia_color};">${store_totals['diferencia']:,.0f}</p>
-                </div>
-            </div>
-        </div>
-        """
-
-    # --- CARD DE TOTAL CONSOLIDADO (SI APLICA) ---
-    consolidated_card_html = ""
-    if selected_store == "Todas las Tiendas" and len(sorted_stores) > 1:
-        diferencia_total_color = "#27ae60" if grand_totals['diferencia'] == 0 else "#c0392b"
-        diferencia_total_icon = "" if grand_totals['diferencia'] == 0 else "⚠️ "
-        
-        consolidated_card_html = f"""
-        <div class="card" style="border-top: 5px solid #0056b3;">
-            <div class="card-header">
-                <h2>Resumen General Consolidado</h2>
-            </div>
-            <div class="card-body">
-                <div class="highlight-section">
-                    <p class="highlight-label">Venta Total Consolidada</p>
-                    <p class="highlight-value">${grand_totals['venta_total']:,.0f}</p>
-                </div>
-                <table class="details-table">
-                    <tr><td>Total Tarjetas</td><td class="amount">${grand_totals['tarjetas']:,.0f}</td></tr>
-                    <tr><td>Total Consignaciones</td><td class="amount">${grand_totals['consignaciones']:,.0f}</td></tr>
-                    <tr><td>Total Gastos</td><td class="amount">${grand_totals['gastos']:,.0f}</td></tr>
-                    <tr><td>Total Movimientos de Efectivo</td><td class="amount">${grand_totals['efectivo']:,.0f}</td></tr>
-                </table>
-                <div class="summary-section" style="background-color: {'#e8f8f5' if grand_totals['diferencia'] == 0 else '#fdedec'};">
-                    <p class="summary-label">{diferencia_total_icon}Diferencia Total en Cuadres</p>
-                    <p class="summary-value" style="color: {diferencia_total_color};">${grand_totals['diferencia']:,.0f}</p>
-                </div>
-            </div>
-        </div>
-        """
+    # Asumimos que 'Ventas en Efectivo' es el total de ingresos menos lo que se pagó con tarjeta.
+    total_ventas_efectivo = total_ingresos - total_ventas_tarjeta
     
-    # --- ESTRUCTURA HTML COMPLETA ---
+    # Saldo final del periodo es el neto (asumiendo saldo inicial 0 para el rango de fechas)
+    saldo_final_periodo = balance_neto
+    
+    # --- 3. FORMATEO DE FECHAS Y TEXTOS ---
+    try:
+        locale.setlocale(locale.LC_ALL, 'es_ES.UTF-8')
+    except locale.Error:
+        locale.setlocale(locale.LC_ALL, '') # Fallback
+
+    # Si el rango es un solo día
+    if start_date == end_date:
+        report_date_str = start_date.strftime("%d de %B de %Y")
+        subtitle_text = f"Reporte para: {selected_store}"
+    else: # Si es un rango de varios días
+        report_date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
+        subtitle_text = f"Reporte Consolidado para: {selected_store}"
+    
+    report_time_str = datetime.now().strftime("%d/%m/%Y a las %H:%M")
+    
+    # Determinar si el resultado es positivo o negativo para el estilo
+    balance_color_class = "positive" if balance_neto >= 0 else "negative"
+    balance_display_text = "Resultado positivo" if balance_neto >= 0 else "Resultado negativo"
+    balance_sign = "+" if balance_neto >= 0 else ""
+
+    # --- 4. CONSTRUCCIÓN DEL HTML CON F-STRINGS ---
     html_body = f"""
-    <!doctype html>
-    <html>
+    <!DOCTYPE html>
+    <html lang="es">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Cuadre Diario de Caja</title>
         <style>
-            body {{ font-family: 'Segoe UI', Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; }}
-            .email-container {{ max-width: 600px; margin: 20px auto; background-color: #ffffff; }}
-            .header {{ background-color: #004a99; color: #ffffff; padding: 25px; text-align: center; border-radius: 8px 8px 0 0; }}
-            .header h1 {{ margin: 0; font-size: 24px; font-weight: 600; }}
-            .header p {{ margin: 5px 0 0; font-size: 16px; opacity: 0.9; }}
-            .content {{ padding: 20px; }}
-            .card {{ border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05); }}
-            .card-header {{ background-color: #f9f9f9; padding: 15px; border-bottom: 1px solid #e0e0e0; }}
-            .card-header h2 {{ margin: 0; font-size: 20px; color: #333; }}
-            .card-body {{ padding: 20px; }}
-            .highlight-section {{ text-align: center; padding: 15px; background-color: #fdf2e9; border-radius: 6px; margin-bottom: 20px; }}
-            .highlight-label {{ margin: 0 0 5px 0; font-size: 14px; color: #666; }}
-            .highlight-value {{ margin: 0; font-size: 32px; font-weight: 700; color: #d9534f; }}
-            .details-table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
-            .details-table td {{ padding: 10px; border-bottom: 1px solid #f0f0f0; font-size: 16px; color: #555; }}
-            .details-table tr:last-child td {{ border-bottom: none; }}
-            .details-table .amount {{ text-align: right; font-weight: 600; font-family: 'Courier New', Courier, monospace; }}
-            .summary-section {{ display: flex; justify-content: space-between; align-items: center; padding: 15px; border-radius: 6px; }}
-            .summary-label {{ margin: 0; font-size: 16px; font-weight: 600; color: #333; }}
-            .summary-value {{ margin: 0; font-size: 22px; font-weight: 700; }}
-            .footer {{ background-color: #333333; color: #cccccc; text-align: center; padding: 20px; font-size: 12px; border-radius: 0 0 8px 8px; }}
-            .footer p {{ margin: 0; }}
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); padding: 40px 20px; min-height: 100vh; }}
+            .email-container {{ max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 20px; box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15); overflow: hidden; }}
+            .header {{ background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 40px 30px; text-align: center; position: relative; }}
+            .header::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.1"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.1"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.1"/><circle cx="10" cy="60" r="0.5" fill="white" opacity="0.1"/><circle cx="90" cy="40" r="0.5" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>'); }}
+            .header-content {{ position: relative; z-index: 1; }}
+            .logo {{ width: 60px; height: 60px; background: rgba(255, 255, 255, 0.2); border-radius: 15px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(10px); }}
+            .logo svg {{ width: 30px; height: 30px; fill: white; }}
+            .header h1 {{ color: white; font-size: 28px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.5px; }}
+            .header .subtitle {{ color: rgba(255, 255, 255, 0.9); font-size: 16px; font-weight: 400; }}
+            .date-badge {{ background: rgba(255, 255, 255, 0.2); color: white; padding: 8px 20px; border-radius: 25px; font-size: 14px; font-weight: 500; margin-top: 20px; display: inline-block; backdrop-filter: blur(10px); }}
+            .content {{ padding: 40px 30px; }}
+            .summary-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }}
+            .summary-card {{ background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-radius: 15px; padding: 25px; border: 1px solid #cbd5e1; position: relative; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }}
+            .summary-card::before {{ content: ''; position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); }}
+            .summary-card h3 {{ color: #475569; font-size: 14px; font-weight: 500; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }}
+            .summary-card .amount {{ color: #1e293b; font-size: 24px; font-weight: 700; margin-bottom: 5px; }}
+            .summary-card .change {{ font-size: 12px; font-weight: 500; }}
+            .positive {{ color: #059669; }}
+            .negative {{ color: #dc2626; }}
+            .details-section {{ background: #ffffff; border-radius: 15px; padding: 25px; margin-bottom: 30px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05); }}
+            .details-section h2 {{ color: #1e293b; font-size: 18px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }}
+            .details-section h2::before {{ content: ''; width: 4px; height: 20px; background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); border-radius: 2px; }}
+            .detail-row {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e2e8f0; }}
+            .detail-row:last-child {{ border-bottom: none; font-weight: 600; color: #1e293b; padding-top: 15px; margin-top: 10px; border-top: 2px solid #e2e8f0; }}
+            .detail-label {{ color: #64748b; font-size: 14px; font-weight: 500; }}
+            .detail-value {{ color: #1e293b; font-size: 14px; font-weight: 600; }}
+            .footer {{ background: #f1f5f9; padding: 25px 30px; text-align: center; border-top: 1px solid #cbd5e1; }}
+            .footer p {{ color: #64748b; font-size: 12px; margin-bottom: 10px; }}
+            .footer .company {{ color: #1e293b; font-weight: 600; font-size: 14px; }}
+            @media (max-width: 600px) {{ .summary-grid {{ grid-template-columns: 1fr; }} .email-container {{ margin: 0; border-radius: 0; }} body {{ padding: 0; }} }}
         </style>
     </head>
     <body>
         <div class="email-container">
             <div class="header">
-                <h1>Resumen Gerencial de Cuadre</h1>
-                <p>Período del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}</p>
-                <p><strong>Tienda(s):</strong> {selected_store}</p>
+                <div class="header-content">
+                    <div class="logo">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                        </svg>
+                    </div>
+                    <h1>Cuadre de Caja Consolidado</h1>
+                    <p class="subtitle">{subtitle_text}</p>
+                    <div class="date-badge">{report_date_str}</div>
+                </div>
             </div>
             <div class="content">
-                {store_cards_html}
-                {consolidated_card_html}
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <h3>Ingresos del Periodo</h3>
+                        <div class="amount">{format_cop(total_ingresos)}</div>
+                        <div class="change">Total ventas (sistema)</div>
+                    </div>
+                    <div class="summary-card">
+                        <h3>Egresos del Periodo</h3>
+                        <div class="amount">{format_cop(total_egresos)}</div>
+                        <div class="change">Gastos, consignaciones y retiros</div>
+                    </div>
+                </div>
+                <div class="details-section">
+                    <h2>Detalle de Movimientos</h2>
+                    <div class="detail-row">
+                        <span class="detail-label">(+) Ingresos por Venta en Efectivo</span>
+                        <span class="detail-value">{format_cop(total_ventas_efectivo)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">(+) Ingresos por Venta con Tarjeta</span>
+                        <span class="detail-value">{format_cop(total_ventas_tarjeta)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">(-) Gastos Operativos</span>
+                        <span class="detail-value negative">-{format_cop(total_gastos)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">(-) Retiros y Consignaciones</span>
+                        <span class="detail-value negative">-{format_cop(total_retiros_y_consignaciones)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Saldo Neto del Periodo</span>
+                        <span class="detail-value {balance_color_class}">{format_cop(saldo_final_periodo)}</span>
+                    </div>
+                </div>
+                <div class="summary-card" style="grid-column: 1 / -1; text-align: center;">
+                    <h3>Balance Neto del Periodo</h3>
+                    <div class="amount {balance_color_class}" style="font-size: 32px;">{balance_sign}{format_cop(balance_neto)}</div>
+                    <div class="change {balance_color_class}">{balance_display_text}</div>
+                </div>
             </div>
             <div class="footer">
-                <p>Este es un correo generado automáticamente por el Sistema de Cuadre Diario de Caja.</p>
-                <p>&copy; {datetime.now().year} - Todos los derechos reservados.</p>
+                <p>Este reporte fue generado automáticamente el <span>{report_time_str}</span></p>
+                <p class="company">Sistema de Gestión Financiera • Tu Empresa</p>
             </div>
         </div>
     </body>
@@ -574,9 +607,10 @@ def generate_summary_email_body(records, start_date, end_date, selected_store):
     """
     return html_body
 
+
 def send_summary_email(registros_ws, start_date, end_date, selected_store, recipient_email):
     """
-    Filtra los datos, genera el resumen y lo envía por correo electrónico.
+    Filtra los datos, genera el resumen con el nuevo diseño y lo envía por correo.
     """
     st.info("Preparando y enviando resumen gerencial...")
 
@@ -606,7 +640,8 @@ def send_summary_email(registros_ws, start_date, end_date, selected_store, recip
         st.warning("No se encontraron registros en el rango de fechas y tienda seleccionados para enviar el correo.")
         return
 
-    email_body = generate_summary_email_body(filtered_records, start_date, end_date, selected_store)
+    # Llamada a la NUEVA función para generar el cuerpo del correo
+    email_body = generate_professional_email_body(filtered_records, start_date, end_date, selected_store)
     subject = f"Resumen de Cuadre de Caja - {selected_store} - {start_date.strftime('%d/%m')} a {end_date.strftime('%d/%m')}"
 
     try:
@@ -622,7 +657,7 @@ def send_summary_email(registros_ws, start_date, end_date, selected_store, recip
     except Exception as e:
         st.error(f"Ocurrió un error inesperado al enviar el correo: {e}")
 
-# --- FIN DE FUNCIONES PARA EL CORREO ---
+# --- FIN DE LA SECCIÓN MODIFICADA ---
 
 
 # --- 4. GESTIÓN DEL ESTADO DE LA SESIÓN ---
