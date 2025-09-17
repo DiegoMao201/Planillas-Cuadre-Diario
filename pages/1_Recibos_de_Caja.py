@@ -24,20 +24,14 @@ def connect_to_gsheet():
     Retorna el objeto de la hoja de configuración.
     """
     try:
-        # Usar la configuración de `Cuadre_Diario_Caja_Final.py` para la conexión
         creds_json = dict(st.secrets["google_credentials"])
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
         client = gspread.authorize(creds)
-        
-        # Asumiendo que el nombre del spreadsheet está en los secrets
         spreadsheet_name = st.secrets["google_sheets"]["spreadsheet_name"]
         sheet = client.open(spreadsheet_name)
-        
-        # Asumiendo que el nombre de la hoja de configuración también está en los secrets
         config_sheet_name = st.secrets["google_sheets"]["config_sheet_name"]
         config_ws = sheet.worksheet(config_sheet_name)
-        
         return config_ws
     except Exception as e:
         st.error(f"Error fatal al conectar con Google Sheets: {e}")
@@ -76,14 +70,18 @@ else:
         st.success("¡Archivo cargado exitosamente! Ahora puedes procesarlo.")
         
         try:
-            # Leer el archivo Excel, indicando que el encabezado está en la fila 3 (índice 2)
-            df = pd.read_excel(uploaded_file, header=2)
+            # Leer el archivo Excel, indicando que el encabezado está en la fila 1 (índice 0)
+            df = pd.read_excel(uploaded_file, header=0)
 
             # Usar .fillna(method='ffill') para propagar los valores de 'NUMRECIBO'
             # y 'FECHA_RECIBO' hacia abajo. Esto agrupa los recibos.
             df['NUMRECIBO'] = df['NUMRECIBO'].ffill()
             df['FECHA_RECIBO'] = df['FECHA_RECIBO'].ffill()
-
+            
+            # También propagar 'NOMBRELIENTE' y 'NIF20' que están en la misma lógica
+            df['NOMBRELIENTE'] = df['NOMBRELIENTE'].ffill()
+            df['NIF20'] = df['NIF20'].ffill()
+            
             # Limpiar los datos de filas con "SUBTOTALES", "TOTALES" o filas completamente vacías
             df_cleaned = df[~df.apply(lambda row: row.astype(str).str.contains('SUBTOTALES|TOTALES', case=False).any(), axis=1)].copy()
             df_cleaned.dropna(subset=['NUMRECIBO'], inplace=True)
@@ -125,11 +123,9 @@ else:
             if df_resumen.empty:
                 st.warning("El archivo no contiene recibos de efectivo válidos. Revisa el formato.")
             else:
-                # 6. Usar st.data_editor para hacer la tabla interactiva
                 st.subheader("Asigna el Destino del Efectivo")
                 st.info("Usa la columna 'Destino' para seleccionar a qué banco o tercero se envió el efectivo de cada recibo.")
 
-                # Se añade la columna 'Destino' para que el usuario pueda editarla
                 df_resumen['Destino'] = "-- Seleccionar --"
 
                 edited_df = st.data_editor(
@@ -167,20 +163,14 @@ else:
 
                 st.divider()
                 if st.button("✅ Procesar y Guardar Asignaciones", type="primary", use_container_width=True):
-                    # Verificar si todos los destinos han sido seleccionados
                     if edited_df['Destino'].isnull().any() or any(d == "-- Seleccionar --" for d in edited_df['Destino']):
                         st.warning("⚠️ Debes asignar un destino válido para TODOS los recibos de caja antes de procesar.")
                     else:
                         st.success("¡Asignaciones procesadas! Los datos están listos para ser usados.")
                         
-                        # --- LÓGICA: GENERACIÓN DEL TXT ---
-                        # Aquí puedes agregar la lógica para generar el archivo TXT con el formato que desees
-                        
-                        # Ejemplo de preparación del contenido para el TXT
                         txt_content = "Resumen de Recibos de Caja\n\n"
                         txt_content += edited_df.to_string(index=False)
                         
-                        # Botón de descarga del archivo
                         st.download_button(
                             label="⬇️ Descargar Archivo de Resumen",
                             data=txt_content,
