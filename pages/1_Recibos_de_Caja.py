@@ -1,10 +1,11 @@
-# Recibos_de_Caja.py
-
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
+
+# --- PÁGINA: Recibos_de_Caja.py ---
+# ==================================
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
@@ -15,8 +16,7 @@ El sistema mostrará una tabla resumida donde podrás asignar el destino (banco 
 para cada monto de efectivo recaudado.
 """)
 
-# --- CONEXIÓN SEGURA A GOOGLE SHEETS (Función Reutilizada) ---
-# Esta función asume que tienes configurado el archivo de credenciales de Google Sheets
+# --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
 @st.cache_resource(ttl=600)
 def connect_to_gsheet():
     """
@@ -24,12 +24,20 @@ def connect_to_gsheet():
     Retorna el objeto de la hoja de configuración.
     """
     try:
+        # Usar la configuración de `Cuadre_Diario_Caja_Final.py` para la conexión
         creds_json = dict(st.secrets["google_credentials"])
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
         client = gspread.authorize(creds)
-        sheet = client.open(st.secrets["google_sheets"]["spreadsheet_name"])
-        config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
+        
+        # Asumiendo que el nombre del spreadsheet está en los secrets
+        spreadsheet_name = st.secrets["google_sheets"]["spreadsheet_name"]
+        sheet = client.open(spreadsheet_name)
+        
+        # Asumiendo que el nombre de la hoja de configuración también está en los secrets
+        config_sheet_name = st.secrets["google_sheets"]["config_sheet_name"]
+        config_ws = sheet.worksheet(config_sheet_name)
+        
         return config_ws
     except Exception as e:
         st.error(f"Error fatal al conectar con Google Sheets: {e}")
@@ -71,41 +79,48 @@ else:
             # Leer el archivo Excel, indicando que el encabezado está en la fila 3 (índice 2)
             df = pd.read_excel(uploaded_file, header=2)
 
-            # Convertir todas las columnas a string para un filtrado seguro
-            df_str = df.astype(str)
-            
+            # Usar .fillna(method='ffill') para propagar los valores de 'NUMRECIBO'
+            # y 'FECHA_RECIBO' hacia abajo. Esto agrupa los recibos.
+            df['NUMRECIBO'] = df['NUMRECIBO'].ffill()
+            df['FECHA_RECIBO'] = df['FECHA_RECIBO'].ffill()
+
             # Limpiar los datos de filas con "SUBTOTALES", "TOTALES" o filas completamente vacías
-            df_filtrado = df_str[~df_str.apply(lambda row: row.astype(str).str.contains('SUBTOTALES|TOTALES', case=False).any() or row.isnull().all(), axis=1)]
+            df_cleaned = df[~df.apply(lambda row: row.astype(str).str.contains('SUBTOTALES|TOTALES', case=False).any(), axis=1)].copy()
+            df_cleaned.dropna(subset=['NUMRECIBO'], inplace=True)
+            df_cleaned.dropna(how='all', inplace=True)
+
+            # Función de limpieza y conversión de importe
+            def clean_and_convert(value):
+                try:
+                    # El formato es "IMPORTE \n IMPORTE", tomamos el primer valor
+                    # Esto también maneja el caso de un solo valor
+                    return float(str(value).split('\n')[0].replace('$', '').replace('.', '').replace(',', ''))
+                except (ValueError, IndexError):
+                    return None
             
-            # Eliminar filas donde 'NUMRECIBO' es 'nan' (vacío) después de la limpieza
-            df_filtrado = df_filtrado.dropna(subset=['NUMRECIBO'])
-            
-            # 5. Seleccionar y renombrar las columnas que necesitas
-            # Se usa .copy() para evitar SettingWithCopyWarning
-            df_resumen = df_filtrado[['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRELIENTE', 'IMPORTE']].copy()
+            # Aplicar la función de limpieza
+            df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
+            df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
+
+            # Agrupar los datos por NUMRECIBO para consolidar la información
+            df_resumen = df_cleaned.groupby('NUMRECIBO').agg({
+                'FECHA_RECIBO': 'first',
+                'NOMBRELIENTE': 'first',
+                'IMPORTE_LIMPIO': 'sum'
+            }).reset_index()
 
             # Renombrar las columnas para una mejor visualización en la tabla
             df_resumen.rename(columns={
                 'FECHA_RECIBO': 'Fecha',
                 'NUMRECIBO': 'Recibo N°',
                 'NOMBRELIENTE': 'Cliente',
-                'IMPORTE': 'Valor Efectivo'
+                'IMPORTE_LIMPIO': 'Valor Efectivo'
             }, inplace=True)
             
-            # Limpiar la columna de importes, que en tu archivo tiene dos valores en una celda
-            # Usamos un try-except para manejar posibles errores de conversión
-            def clean_and_convert(value):
-                try:
-                    # Dividir la cadena, tomar el primer valor, limpiar y convertir a float
-                    return float(str(value).split(' ')[0].replace('$', '').replace('.', '').replace(',', ''))
-                except (ValueError, IndexError):
-                    return None
+            # Formatear la fecha para mostrar solo la parte de la fecha
+            if pd.api.types.is_datetime64_any_dtype(df_resumen['Fecha']):
+                df_resumen['Fecha'] = pd.to_datetime(df_resumen['Fecha']).dt.strftime('%d/%m/%Y')
             
-            df_resumen['Valor Efectivo'] = df_resumen['Valor Efectivo'].apply(clean_and_convert)
-            
-            # Eliminar cualquier fila que tenga un valor no numérico después de la limpieza
-            df_resumen.dropna(subset=['Valor Efectivo'], inplace=True)
-
             # Verificamos si la tabla tiene datos después de la limpieza
             if df_resumen.empty:
                 st.warning("El archivo no contiene recibos de efectivo válidos. Revisa el formato.")
@@ -115,7 +130,7 @@ else:
                 st.info("Usa la columna 'Destino' para seleccionar a qué banco o tercero se envió el efectivo de cada recibo.")
 
                 # Se añade la columna 'Destino' para que el usuario pueda editarla
-                df_resumen['Destino'] = None
+                df_resumen['Destino'] = "-- Seleccionar --"
 
                 edited_df = st.data_editor(
                     df_resumen,
@@ -173,7 +188,6 @@ else:
                             mime="text/plain"
                         )
                         st.info("El archivo TXT se ha generado y está listo para descargar.")
-
 
         except Exception as e:
             st.error(f"Ocurrió un error al leer o procesar el archivo Excel: {e}")
