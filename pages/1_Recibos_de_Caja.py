@@ -245,21 +245,32 @@ else:
                 # Esto elimina eficazmente las filas de encabezado de recibo y las de subtotales.
                 df_cleaned = df.dropna(subset=['FECHA_RECIBO', 'NOMBRECLIENTE']).copy()
                 
-                # PASO 3: Función para limpiar y convertir valores de moneda.
-                # Maneja formatos como "$ 1.234.567,89", eliminando símbolos y convirtiéndolos a un número (float).
+                # PASO 3: Función para limpiar y convertir valores de moneda (CORREGIDA).
+                # Esta versión es más robusta y maneja correctamente números que usan '.' como separador de miles y ',' como decimal.
+                # También procesa correctamente valores que pandas ya ha interpretado como números (float).
                 def clean_and_convert(value):
+                    # Primero, verificamos si el valor ya es un tipo numérico. Si es así, no necesita limpieza.
+                    if isinstance(value, (int, float)):
+                        return float(value)
+
+                    # Si no es numérico, lo procesamos como un string.
                     try:
-                        str_value = str(value).strip()
-                        # 1. Quitar el símbolo de moneda '$'
-                        str_value = str_value.replace('$', '')
-                        # 2. Quitar el separador de miles '.'
-                        str_value = str_value.replace('.', '')
-                        # 3. Reemplazar el separador decimal ',' por un punto '.'
-                        str_value = str_value.replace(',', '.')
-                        # Convertir a float (número con decimales)
+                        # Convertimos a string y eliminamos espacios y el símbolo de moneda.
+                        str_value = str(value).replace('$', '').strip()
+
+                        # La clave de la corrección está aquí:
+                        # Solo eliminamos los puntos (separadores de miles) si existe una coma (separador decimal).
+                        # Esto evita el error de eliminar el punto decimal en números que ya están en formato float (ej: "235182.0").
+                        if ',' in str_value:
+                            # 1. Quitar el separador de miles '.'
+                            str_value = str_value.replace('.', '')
+                            # 2. Reemplazar el separador decimal ',' por un punto '.' para que Python lo entienda.
+                            str_value = str_value.replace(',', '.')
+                        
+                        # Convertir el string limpio a float.
                         return float(str_value)
-                    except (ValueError, IndexError):
-                        # Si la conversión falla, devuelve None
+                    except (ValueError, TypeError):
+                        # Si la conversión falla por cualquier motivo, se devuelve None.
                         return None
                 
                 # Aplica la función de limpieza a la columna 'IMPORTE'.
