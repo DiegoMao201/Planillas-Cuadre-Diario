@@ -217,6 +217,13 @@ else:
         if uploaded_file is not None:
             st.success("¡Archivo subido con éxito! Ahora puedes procesarlo.")
             
+            # --- PROCESAMIENTO DEL ARCHIVO CARGADO ---
+            # El código está diseñado para buscar las siguientes columnas clave en tu archivo Excel:
+            # 'FECHA_RECIBO': Esencial para identificar las filas de transacciones reales y filtrar los subtotales.
+            # 'NUMRECIBO': Se usa para agrupar todas las transacciones que pertenecen al mismo recibo.
+            # 'NOMBRECLIENTE': Para identificar al cliente en el resumen final.
+            # 'IMPORTE': Contiene los valores monetarios que se limpiarán y sumarán.
+            # El formato de columnas que proporcionaste es compatible con esta lógica.
             try:
                 # Lee el archivo Excel y lo carga en un DataFrame de pandas.
                 df = pd.read_excel(uploaded_file, header=0)
