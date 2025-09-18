@@ -279,7 +279,7 @@ else:
         if st.button("✏️ Editar Grupo Existente", use_container_width=True, type="primary" if st.session_state.mode == 'edit' else "secondary"):
             for key in list(st.session_state.keys()):
                 if key not in ['mode', 'google_credentials']:
-                     del st.session_state[key]
+                        del st.session_state[key]
             st.session_state.mode = 'edit'
             st.rerun()
             
@@ -300,7 +300,31 @@ else:
             
             if st.button("Buscar Grupos", use_container_width=True):
                 try:
-                    all_records_df = pd.DataFrame(registros_recibos_ws.get_all_records())
+                    # --- INICIO DE LA CORRECCIÓN ---
+                    # Leer todos los valores en lugar de 'get_all_records' para evitar errores de cabecera duplicada.
+                    all_values = registros_recibos_ws.get_all_values()
+                    
+                    # Si la hoja tiene menos de 2 filas (solo cabecera o vacía), no hay datos que buscar.
+                    if len(all_values) < 2:
+                        all_records_df = pd.DataFrame()
+                    else:
+                        # La primera fila son las cabeceras, el resto son los datos.
+                        headers = all_values[0]
+                        data = all_values[1:]
+                        all_records_df = pd.DataFrame(data, columns=headers)
+                        
+                        # Limpiar columnas con cabeceras vacías ('') que causan el error original.
+                        if '' in all_records_df.columns:
+                            all_records_df = all_records_df.drop(columns=[''])
+                        
+                        # Verificar que las columnas necesarias existan después de la carga
+                        required_search_cols = ['Fecha', 'Serie', 'Consecutivo Global', 'Recibo N°', 'Valor Efectivo']
+                        for col in required_search_cols:
+                            if col not in all_records_df.columns:
+                                st.error(f"Error crítico: La columna esperada '{col}' no se encontró en la hoja 'RegistrosRecibos'. Por favor, verifica la cabecera en Google Sheets.")
+                                st.stop()
+                    # --- FIN DE LA CORRECCIÓN ---
+
                     if not all_records_df.empty:
                         # Filtrar por fecha y serie
                         filtered_df = all_records_df[
@@ -316,7 +340,7 @@ else:
                             ).reset_index()
                             st.session_state.full_search_results = all_records_df # Guardar resultados completos
                         else:
-                            st.session_state.found_groups = []
+                            st.session_state.found_groups = pd.DataFrame() # Usar DataFrame vacío para consistencia
                             st.warning("No se encontraron grupos para esa fecha y serie.")
                     else:
                         st.warning("No hay registros en la hoja 'RegistrosRecibos' para buscar.")
