@@ -221,7 +221,7 @@ else:
                 # Lee el archivo Excel y lo carga en un DataFrame de pandas.
                 df = pd.read_excel(uploaded_file, header=0)
 
-                # --- NUEVA VALIDACIÓN DE COLUMNAS ---
+                # --- VALIDACIÓN DE COLUMNAS ---
                 # Define las columnas que son absolutamente necesarias para que el script funcione.
                 required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
                 # Verifica si todas las columnas requeridas existen en el archivo subido.
@@ -233,15 +233,19 @@ else:
                     st.warning("Por favor, asegúrate de que el archivo de Excel contenga estas columnas con los nombres exactos.")
                     st.stop() # Detiene la ejecución del script para evitar más errores.
 
-                # --- LÓGICA DE LIMPIEZA DE DATOS ---
-                
-                # PASO 1: Identificar y eliminar filas de subtotales/totales.
-                # Se asume que una fila de transacción válida DEBE tener una fecha.
-                # Las filas de subtotales o totales generalmente no tienen fecha, así que se eliminan.
+                # --- LÓGICA DE LIMPIEZA DE DATOS MEJORADA Y ROBUSTA ---
+                # Este bloque está diseñado para eliminar de forma segura las filas de subtotales y totales.
+
+                # PASO 1: Eliminar filas de subtotales y totales de manera confiable.
+                # La estrategia es asumir que CUALQUIER fila de transacción válida DEBE tener una fecha.
+                # Las filas de subtotales y totales en el informe generalmente no tienen fecha.
+                # Al eliminar todas las filas que no tienen valor en 'FECHA_RECIBO', nos deshacemos
+                # de todas las filas no deseadas ANTES de cualquier otro procesamiento.
                 df_cleaned = df.dropna(subset=['FECHA_RECIBO']).copy()
 
                 # PASO 2: Rellenar hacia abajo la información de identificación.
-                # Esto propaga el número de recibo, fecha y cliente a todas las líneas de detalle asociadas.
+                # Ahora que solo quedan filas de transacciones, podemos propagar de forma segura
+                # el número de recibo, fecha y nombre del cliente a todas las líneas de detalle relacionadas.
                 id_cols = ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE', 'NIF20']
                 for col in id_cols:
                     if col in df_cleaned.columns:
