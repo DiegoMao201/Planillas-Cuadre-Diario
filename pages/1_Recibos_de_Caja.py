@@ -230,64 +230,32 @@ else:
                     st.stop()
 
                 # --- LÓGICA DE LIMPIEZA DE DATOS CORREGIDA PARA EL FORMATO DEL ARCHIVO ---
-                # Este bloque está diseñado para interpretar correctamente la estructura donde los datos
-                # de un recibo están en filas separadas.
-
-                # PASO 1: Propagar el número de recibo hacia abajo.
-                # El número de recibo (NUMRECIBO) aparece en su propia fila. Usamos 'ffill' (forward fill)
-                # para copiar ese número a todas las filas de detalle y subtotal que le pertenecen, ANTES de borrar nada.
                 if 'NUMRECIBO' in df.columns:
                     df['NUMRECIBO'] = df['NUMRECIBO'].ffill()
 
-                # PASO 2: Eliminar filas que no son transacciones.
-                # Ahora que el NUMRECIBO está en todas las filas, podemos identificar de forma segura las filas
-                # de transacciones reales. Estas son las que tienen un valor en 'FECHA_RECIBO' y 'NOMBRECLIENTE'.
-                # Esto elimina eficazmente las filas de encabezado de recibo y las de subtotales.
                 df_cleaned = df.dropna(subset=['FECHA_RECIBO', 'NOMBRECLIENTE']).copy()
                 
-                # PASO 3: Función para limpiar y convertir valores de moneda (CORREGIDA).
-                # Esta versión es más robusta y maneja correctamente números que usan '.' como separador de miles y ',' como decimal.
-                # También procesa correctamente valores que pandas ya ha interpretado como números (float).
                 def clean_and_convert(value):
-                    # Primero, verificamos si el valor ya es un tipo numérico. Si es así, no necesita limpieza.
                     if isinstance(value, (int, float)):
                         return float(value)
-
-                    # Si no es numérico, lo procesamos como un string.
                     try:
-                        # Convertimos a string y eliminamos espacios y el símbolo de moneda.
                         str_value = str(value).replace('$', '').strip()
-
-                        # La clave de la corrección está aquí:
-                        # Solo eliminamos los puntos (separadores de miles) si existe una coma (separador decimal).
-                        # Esto evita el error de eliminar el punto decimal en números que ya están en formato float (ej: "235182.0").
                         if ',' in str_value:
-                            # 1. Quitar el separador de miles '.'
                             str_value = str_value.replace('.', '')
-                            # 2. Reemplazar el separador decimal ',' por un punto '.' para que Python lo entienda.
                             str_value = str_value.replace(',', '.')
-                        
-                        # Convertir el string limpio a float.
                         return float(str_value)
                     except (ValueError, TypeError):
-                        # Si la conversión falla por cualquier motivo, se devuelve None.
                         return None
                 
-                # Aplica la función de limpieza a la columna 'IMPORTE'.
                 df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
-                # Elimina cualquier fila donde la conversión de moneda haya fallado.
                 df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
 
-                # --- FIN DE LA LÓGICA DE LIMPIEZA ---
-
-                # Agrupa por número de recibo y suma los montos limpios para obtener el total por recibo.
                 df_resumen = df_cleaned.groupby('NUMRECIBO').agg({
-                    'FECHA_RECIBO': 'first', # Toma el primer valor (todos deberían ser iguales).
+                    'FECHA_RECIBO': 'first',
                     'NOMBRECLIENTE': 'first',
-                    'IMPORTE_LIMPIO': 'sum' # Suma todos los importes del mismo recibo.
+                    'IMPORTE_LIMPIO': 'sum'
                 }).reset_index()
 
-                # Renombra las columnas para que sean más amigables en la interfaz de usuario.
                 df_resumen.rename(columns={
                     'FECHA_RECIBO': 'Fecha',
                     'NUMRECIBO': 'Recibo N°',
@@ -295,68 +263,96 @@ else:
                     'IMPORTE_LIMPIO': 'Valor Efectivo'
                 }, inplace=True)
                 
-                # Asegura que la columna de fecha tenga el formato DD/MM/YYYY.
                 if pd.api.types.is_datetime64_any_dtype(df_resumen['Fecha']):
                     df_resumen['Fecha'] = pd.to_datetime(df_resumen['Fecha']).dt.strftime('%d/%m/%Y')
                 
-                # Si después de la limpieza el DataFrame está vacío, muestra una advertencia.
+                df_resumen['Destino'] = "-- Seleccionar --"
+
+                # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
+                # Usamos st.session_state para guardar el DataFrame y que no se pierda entre interacciones.
+                # Se reinicia cada vez que se sube un archivo nuevo.
+                if 'df_procesado' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
+                    st.session_state.df_procesado = df_resumen.copy()
+                    st.session_state.uploaded_file_name = uploaded_file.name
+
                 if df_resumen.empty:
                     st.warning("El archivo no contiene recibos de caja válidos después de la limpieza. Por favor, revisa el formato y los datos.")
                 else:
-                    # Muestra un resumen del total recaudado.
                     st.subheader("📊 Resumen del Día")
-                    total_recibos = df_resumen['Valor Efectivo'].sum()
-                    # Formatea el total como moneda colombiana (puntos para miles, coma para decimales).
+                    total_recibos = st.session_state.df_procesado['Valor Efectivo'].sum()
                     st.metric(label="💰 Total Efectivo Recaudado", value=f"${total_recibos:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                    st.divider() # Dibuja una línea divisoria.
+                    st.divider()
 
-                    st.subheader("Asignar Destino del Efectivo")
-                    st.info("Usa la columna 'Destino' para seleccionar a qué banco o tercero se entregó el efectivo de cada recibo.")
+                    # --- NUEVA SECCIÓN: HERRAMIENTA DE ASIGNACIÓN RÁPIDA ---
+                    st.subheader("🚀 Asignación Rápida de Destino")
+                    st.info("Usa esta herramienta para asignar un mismo destino a todos los recibos de forma masiva.")
+                    
+                    # Creamos dos columnas para alinear el selector y el botón.
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        # Selector para que el usuario elija el destino a aplicar masivamente.
+                        destino_masivo = st.selectbox(
+                            "Selecciona un destino para aplicar a todos los recibos:",
+                            options=opciones_destino,
+                            index=0,
+                            key="sel_destino_masivo"
+                        )
+                    with col2:
+                        # Espacio vertical para alinear el botón con el selector.
+                        st.write("")
+                        st.write("")
+                        # Botón que, al ser presionado, ejecuta la lógica de asignación masiva.
+                        if st.button("Aplicar a Todos", use_container_width=True):
+                            if destino_masivo != "-- Seleccionar --":
+                                # Actualiza la columna 'Destino' en el DataFrame guardado en la sesión.
+                                st.session_state.df_procesado['Destino'] = destino_masivo
+                                st.success(f"Se asignó '{destino_masivo}' a todos los recibos. Ahora puedes guardar o editar individualmente.")
+                                # Forzamos un refresco para que la tabla muestre los cambios inmediatamente.
+                                st.rerun()
+                            else:
+                                st.warning("Por favor, selecciona un destino válido antes de aplicar.")
+                    st.divider()
 
-                    # Añade la columna 'Destino' con un valor por defecto.
-                    df_resumen['Destino'] = "-- Seleccionar --"
-
-                    # Muestra una tabla editable (data_editor) para que el usuario asigne los destinos.
+                    # --- TABLA EDITABLE ---
+                    st.subheader("Asignar Destino del Efectivo (Puedes editar individualmente)")
+                    
+                    # El data_editor ahora usa el DataFrame del session_state.
+                    # Esto asegura que los cambios de la asignación masiva se reflejen aquí.
                     edited_df = st.data_editor(
-                        df_resumen,
+                        st.session_state.df_procesado,
                         column_config={
                             "Destino": st.column_config.SelectboxColumn(
                                 "Destino del Efectivo",
                                 help="Selecciona el banco o tercero donde se consignó/entregó el efectivo.",
                                 options=opciones_destino,
-                                required=True # Hace que la selección sea obligatoria.
+                                required=True
                             ),
                             "Valor Efectivo": st.column_config.NumberColumn("Valor Efectivo", format="$ %.2f", disabled=True),
                             "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
                             "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
                             "Recibo N°": st.column_config.TextColumn("Recibo N°", disabled=True),
                         },
-                        hide_index=True, # Oculta el índice del DataFrame.
-                        use_container_width=True, # Hace que la tabla ocupe todo el ancho disponible.
-                        key="editor_recibos" # Una clave única para este componente.
+                        hide_index=True,
+                        use_container_width=True,
+                        key="editor_recibos"
                     )
 
                     st.divider()
-                    # Muestra el botón principal para procesar los datos.
                     if st.button("✅ Procesar y Guardar Asignaciones", type="primary", use_container_width=True):
-                        # Verifica si todos los recibos tienen un destino asignado.
+                        # Al guardar, usamos el DataFrame 'edited_df' que contiene todas las ediciones (masivas e individuales).
                         if edited_df['Destino'].isnull().any() or any(d == "-- Seleccionar --" for d in edited_df['Destino']):
                             st.warning("⚠️ Debes asignar un destino válido para TODOS los recibos de caja antes de procesar.")
                         else:
                             st.success("¡Asignaciones procesadas! Los datos están listos para ser guardados.")
                             
                             try:
-                                # Obtiene el siguiente consecutivo global para este lote de registros.
                                 global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
                                 if global_consecutive is None:
-                                    # Si no se puede obtener el consecutivo, detiene el proceso.
                                     st.error("No se pudo obtener el consecutivo global. No se puede guardar.")
                                     st.stop()
 
-                                # Genera el contenido del archivo TXT.
                                 txt_content = generate_txt_from_df(edited_df, account_mappings, global_consecutive)
 
-                                # Prepara los datos para ser guardados en la hoja de registros de Google Sheets.
                                 registros_data = []
                                 for _, row in edited_df.iterrows():
                                     registros_data.append([
@@ -366,19 +362,16 @@ else:
                                         row['Valor Efectivo'],
                                         row['Destino'],
                                         global_consecutive,
-                                        datetime.now().strftime("%d/%m/%Y %H:%M:%S") # Añade marca de tiempo del procesamiento.
+                                        datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                                     ])
                                 
-                                # Añade las nuevas filas a la hoja de Google Sheets.
                                 registros_recibos_ws.append_rows(registros_data, value_input_option='USER_ENTERED')
-                                # Actualiza el contador del consecutivo global.
                                 update_global_consecutive(global_consecutivo_ws, global_consecutive)
                                 st.success("✅ Datos guardados en Google Sheets.")
 
-                                # Muestra el botón de descarga para el archivo TXT.
                                 st.download_button(
                                     label="⬇️ Descargar Archivo TXT para el ERP",
-                                    data=txt_content.encode('utf-8'), # Codifica el contenido a UTF-8.
+                                    data=txt_content.encode('utf-8'),
                                     file_name=f"recibos_caja_{datetime.now().strftime('%Y%m%d')}.txt",
                                     mime="text/plain"
                                 )
@@ -391,4 +384,3 @@ else:
             except Exception as e:
                 st.error(f"Ocurrió un error al leer o procesar el archivo de Excel: {e}")
                 st.warning("Asegúrate de que el archivo no esté corrupto y tenga el formato esperado.")
-
