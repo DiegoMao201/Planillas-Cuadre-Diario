@@ -122,7 +122,7 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
             fecha = row['Fecha']
 
         # Obtiene los demás datos de la fila.
-        num_recibo = str(row['Recibo N°'])
+        num_recibo = str(int(row['Recibo N°'])) # Se convierte a entero para quitar decimales
         valor = float(row['Valor Efectivo'])
         destino = str(row['Destino'])
         
@@ -217,49 +217,36 @@ else:
         if uploaded_file is not None:
             st.success("¡Archivo subido con éxito! Ahora puedes procesarlo.")
             
-            # --- PROCESAMIENTO DEL ARCHIVO CARGADO ---
-            # El código está diseñado para buscar las siguientes columnas clave en tu archivo Excel:
-            # 'FECHA_RECIBO': Esencial para identificar las filas de transacciones reales y filtrar los subtotales.
-            # 'NUMRECIBO': Se usa para agrupar todas las transacciones que pertenecen al mismo recibo.
-            # 'NOMBRECLIENTE': Para identificar al cliente en el resumen final.
-            # 'IMPORTE': Contiene los valores monetarios que se limpiarán y sumarán.
-            # El formato de columnas que proporcionaste es compatible con esta lógica.
             try:
                 # Lee el archivo Excel y lo carga en un DataFrame de pandas.
                 df = pd.read_excel(uploaded_file, header=0)
 
                 # --- VALIDACIÓN DE COLUMNAS ---
-                # Define las columnas que son absolutamente necesarias para que el script funcione.
                 required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
-                # Verifica si todas las columnas requeridas existen en el archivo subido.
                 missing_columns = [col for col in required_columns if col not in df.columns]
-                
-                # Si faltan columnas, muestra un error detallado y detiene la ejecución.
                 if missing_columns:
                     st.error(f"Error en el formato del archivo. Faltan las siguientes columnas: {', '.join(missing_columns)}")
                     st.warning("Por favor, asegúrate de que el archivo de Excel contenga estas columnas con los nombres exactos.")
-                    st.stop() # Detiene la ejecución del script para evitar más errores.
+                    st.stop()
 
-                # --- LÓGICA DE LIMPIEZA DE DATOS MEJORADA Y ROBUSTA ---
-                # Este bloque está diseñado para eliminar de forma segura las filas de subtotales y totales.
+                # --- LÓGICA DE LIMPIEZA DE DATOS CORREGIDA PARA EL FORMATO DEL ARCHIVO ---
+                # Este bloque está diseñado para interpretar correctamente la estructura donde los datos
+                # de un recibo están en filas separadas.
 
-                # PASO 1: Eliminar filas de subtotales y totales de manera confiable.
-                # La estrategia es asumir que CUALQUIER fila de transacción válida DEBE tener una fecha.
-                # Las filas de subtotales y totales en el informe generalmente no tienen fecha.
-                # Al eliminar todas las filas que no tienen valor en 'FECHA_RECIBO', nos deshacemos
-                # de todas las filas no deseadas ANTES de cualquier otro procesamiento.
-                df_cleaned = df.dropna(subset=['FECHA_RECIBO']).copy()
+                # PASO 1: Propagar el número de recibo hacia abajo.
+                # El número de recibo (NUMRECIBO) aparece en su propia fila. Usamos 'ffill' (forward fill)
+                # para copiar ese número a todas las filas de detalle y subtotal que le pertenecen, ANTES de borrar nada.
+                if 'NUMRECIBO' in df.columns:
+                    df['NUMRECIBO'] = df['NUMRECIBO'].ffill()
 
-                # PASO 2: Rellenar hacia abajo la información de identificación.
-                # Ahora que solo quedan filas de transacciones, podemos propagar de forma segura
-                # el número de recibo, fecha y nombre del cliente a todas las líneas de detalle relacionadas.
-                id_cols = ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE', 'NIF20']
-                for col in id_cols:
-                    if col in df_cleaned.columns:
-                        df_cleaned[col] = df_cleaned[col].ffill()
-
+                # PASO 2: Eliminar filas que no son transacciones.
+                # Ahora que el NUMRECIBO está en todas las filas, podemos identificar de forma segura las filas
+                # de transacciones reales. Estas son las que tienen un valor en 'FECHA_RECIBO' y 'NOMBRECLIENTE'.
+                # Esto elimina eficazmente las filas de encabezado de recibo y las de subtotales.
+                df_cleaned = df.dropna(subset=['FECHA_RECIBO', 'NOMBRECLIENTE']).copy()
+                
                 # PASO 3: Función para limpiar y convertir valores de moneda.
-                # Maneja formatos como "$ 1.234,56", eliminando símbolos y convirtiéndolos a un número (float).
+                # Maneja formatos como "$ 1.234.567,89", eliminando símbolos y convirtiéndolos a un número (float).
                 def clean_and_convert(value):
                     try:
                         str_value = str(value).strip()
@@ -393,3 +380,4 @@ else:
             except Exception as e:
                 st.error(f"Ocurrió un error al leer o procesar el archivo de Excel: {e}")
                 st.warning("Asegúrate de que el archivo no esté corrupto y tenga el formato esperado.")
+
