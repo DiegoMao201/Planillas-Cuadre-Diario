@@ -30,18 +30,29 @@ def connect_to_gsheet():
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
         client = gspread.authorize(creds)
-        spreadsheet_name = st.secrets["google_sheets"]["spreadsheet_name"]
+        
+        # --- CORRECCIÓN APLICADA AQUÍ ---
+        # Se abre el libro de cálculo usando su nombre real en lugar de buscarlo en secrets.
+        spreadsheet_name = "Planillas_Ferreinox"
         sheet = client.open(spreadsheet_name)
         
-        # Obtenemos las hojas de trabajo
-        config_ws = sheet.worksheet(st.secrets["google_sheets"]["config_sheet_name"])
-        registros_recibos_ws = sheet.worksheet(st.secrets["google_sheets"]["registros_recibos_sheet_name"])
+        # Obtenemos las hojas de trabajo usando sus nombres reales.
+        config_ws = sheet.worksheet("Configuracion")
+        registros_recibos_ws = sheet.worksheet("RegistrosRecibos")
         global_consecutivo_ws = sheet.worksheet("GlobalConsecutivo")
         
         return config_ws, registros_recibos_ws, global_consecutivo_ws
+        
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error(f"Error fatal: No se encontró el archivo de Google Sheets llamado '{spreadsheet_name}'. Verifique el nombre y los permisos de acceso.")
+        return None, None, None
+    except gspread.exceptions.WorksheetNotFound as e:
+        st.error(f"Error fatal: No se encontró una de las hojas requeridas en el archivo. Detalle: {e}")
+        st.warning("Asegúrese de que existan las hojas llamadas 'Configuracion', 'RegistrosRecibos' y 'GlobalConsecutivo'.")
+        return None, None, None
     except Exception as e:
         st.error(f"Error fatal al conectar con Google Sheets: {e}")
-        st.warning("Verifique las credenciales y los nombres de las hojas 'Configuracion', 'RegistrosRecibos' y 'GlobalConsecutivo' en los 'secrets' de Streamlit.")
+        st.warning("Verifique las credenciales en los 'secrets' de Streamlit y los permisos de la cuenta de servicio sobre el archivo.")
         return None, None, None
 
 def get_app_config(config_ws):
@@ -77,15 +88,13 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
     """
     txt_lines = []
     
-    # Supongamos una cuenta de contrapartida para los recibos de caja, podría ser la cuenta 11050501
-    cuenta_recibo_caja = "11050501" 
+    cuenta_recibo_caja = "11050501" # Cuenta de contrapartida para recibos de caja
     
     for _, row in df.iterrows():
-        # Aseguramos que la fecha se procese correctamente, venga como string o datetime
         try:
             fecha = pd.to_datetime(row['Fecha'], dayfirst=True).strftime('%d/%m/%Y')
         except (ValueError, TypeError):
-            fecha = row['Fecha'] # Si ya está en el formato correcto, la usamos tal cual
+            fecha = row['Fecha'] 
 
         num_recibo = str(row['Recibo N°'])
         valor = float(row['Valor Efectivo'])
@@ -100,15 +109,13 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
         nit_tercero = destino_info.get('nit')
         nombre_tercero = destino_info.get('nombre')
         
-        # Línea de débito (movimiento hacia el banco/tercero)
         linea_debito = "|".join([
-            fecha, str(global_consecutive), cuenta_destino, "8", # "8" es un tipo de documento de ejemplo
+            fecha, str(global_consecutive), cuenta_destino, "8",
             f"Recibo de Caja {num_recibo} - {destino}", "Recibos", num_recibo,
             str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
         ])
         txt_lines.append(linea_debito)
 
-        # Línea de crédito (la contrapartida del recibo de caja)
         linea_credito = "|".join([
             fecha, str(global_consecutive), cuenta_recibo_caja, "8", 
             f"Recibo de Caja {num_recibo} - Cliente {row['Cliente']}", "Recibos", num_recibo,
@@ -120,14 +127,11 @@ def generate_txt_from_df(df, account_mappings, global_consecutive):
 
 def get_next_global_consecutive(global_consecutivo_ws):
     """
-    Obtiene el siguiente número consecutivo global para el documento del ERP,
-    buscando la etiqueta 'Ultimo_Consecutivo_Global' y leyendo el valor.
+    Obtiene el siguiente número consecutivo global para el documento del ERP.
     """
     try:
-        # Busca la celda con la etiqueta 'Ultimo_Consecutivo_Global'
         cell = global_consecutivo_ws.find('Ultimo_Consecutivo_Global')
         if cell:
-            # Lee el valor de la celda a la derecha de la etiqueta (misma fila, columna + 1)
             last_consecutive = int(global_consecutivo_ws.cell(cell.row, cell.col + 1).value)
             return last_consecutive + 1
         else:
@@ -139,13 +143,11 @@ def get_next_global_consecutive(global_consecutivo_ws):
 
 def update_global_consecutive(global_consecutivo_ws, new_consecutive):
     """
-    Actualiza el último consecutivo global usado, buscando la etiqueta y actualizando el valor.
+    Actualiza el último consecutivo global usado.
     """
     try:
-        # Busca la celda con la etiqueta 'Ultimo_Consecutivo_Global'
         cell = global_consecutivo_ws.find('Ultimo_Consecutivo_Global')
         if cell:
-            # Actualiza el valor de la celda a la derecha de la etiqueta
             global_consecutivo_ws.update_cell(cell.row, cell.col + 1, new_consecutive)
     except Exception as e:
         st.error(f"Error al actualizar el consecutivo global: {e}")
@@ -171,40 +173,32 @@ else:
             st.success("¡Archivo cargado exitosamente! Ahora puedes procesarlo.")
             
             try:
-                # Leer el archivo Excel, indicando que el encabezado está en la fila 1 (índice 0)
                 df = pd.read_excel(uploaded_file, header=0)
 
-                # Usar .fillna(method='ffill') para propagar los valores
                 df['NUMRECIBO'] = df['NUMRECIBO'].ffill()
                 df['FECHA_RECIBO'] = df['FECHA_RECIBO'].ffill()
                 df['NOMBRECLIENTE'] = df['NOMBRECLIENTE'].ffill()
                 df['NIF20'] = df['NIF20'].ffill()
                 
-                # Limpiar los datos de filas con "SUBTOTALES", "TOTALES" o filas completamente vacías
                 df_cleaned = df[~df.apply(lambda row: row.astype(str).str.contains('SUBTOTALES|TOTALES', case=False).any(), axis=1)].copy()
                 df_cleaned.dropna(subset=['NUMRECIBO'], inplace=True)
                 df_cleaned.dropna(how='all', inplace=True)
 
-                # Función de limpieza y conversión de importe
                 def clean_and_convert(value):
                     try:
-                        # Limpia el valor: toma la primera parte si hay saltos de línea, quita símbolos y convierte a float
                         return float(str(value).split('\n')[0].replace('$', '').replace('.', '').replace(',', ''))
                     except (ValueError, IndexError):
                         return None
                 
-                # Aplicar la función de limpieza
                 df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
                 df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
 
-                # Agrupar los datos por NUMRECIBO para consolidar la información
                 df_resumen = df_cleaned.groupby('NUMRECIBO').agg({
                     'FECHA_RECIBO': 'first',
                     'NOMBRECLIENTE': 'first',
                     'IMPORTE_LIMPIO': 'sum'
                 }).reset_index()
 
-                # Renombrar las columnas para una mejor visualización en la tabla
                 df_resumen.rename(columns={
                     'FECHA_RECIBO': 'Fecha',
                     'NUMRECIBO': 'Recibo N°',
@@ -212,15 +206,12 @@ else:
                     'IMPORTE_LIMPIO': 'Valor Efectivo'
                 }, inplace=True)
                 
-                # Formatear la fecha para mostrar solo la parte de la fecha
                 if pd.api.types.is_datetime64_any_dtype(df_resumen['Fecha']):
                     df_resumen['Fecha'] = pd.to_datetime(df_resumen['Fecha']).dt.strftime('%d/%m/%Y')
                 
-                # Verificamos si la tabla tiene datos después de la limpieza
                 if df_resumen.empty:
                     st.warning("El archivo no contiene recibos de efectivo válidos. Revisa el formato.")
                 else:
-                    # --- Sección de Totalización Visual ---
                     st.subheader("📊 Resumen del Día")
                     total_recibos = df_resumen['Valor Efectivo'].sum()
                     st.metric(label="💰 Total Efectivo Recaudado", value=f"${total_recibos:,.0f}".replace(",", "."))
@@ -240,23 +231,10 @@ else:
                                 options=opciones_destino,
                                 required=True
                             ),
-                            "Valor Efectivo": st.column_config.NumberColumn(
-                                "Valor Efectivo",
-                                format="$ %.0f",
-                                disabled=True
-                            ),
-                            "Fecha": st.column_config.TextColumn(
-                                "Fecha",
-                                disabled=True
-                            ),
-                            "Cliente": st.column_config.TextColumn(
-                                "Cliente",
-                                disabled=True
-                            ),
-                            "Recibo N°": st.column_config.TextColumn(
-                                "Recibo N°",
-                                disabled=True
-                            ),
+                            "Valor Efectivo": st.column_config.NumberColumn("Valor Efectivo", format="$ %.0f", disabled=True),
+                            "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
+                            "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                            "Recibo N°": st.column_config.TextColumn("Recibo N°", disabled=True),
                         },
                         hide_index=True,
                         use_container_width=True,
@@ -270,18 +248,14 @@ else:
                         else:
                             st.success("¡Asignaciones procesadas! Los datos están listos para ser usados.")
                             
-                            # --- Guardar en Google Sheets y generar TXT ---
                             try:
-                                # Obtener el consecutivo global para el documento del ERP
                                 global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
                                 if global_consecutive is None:
                                     st.error("No se pudo obtener el consecutivo global. No se puede guardar.")
-                                    st.stop() # <-- ESTA ES LA LÍNEA CORREGIDA
+                                    st.stop()
 
-                                # Generar el archivo TXT
                                 txt_content = generate_txt_from_df(edited_df, account_mappings, global_consecutive)
 
-                                # Preparar los datos para guardar en la hoja de registros
                                 registros_data = []
                                 for _, row in edited_df.iterrows():
                                     registros_data.append([
@@ -298,7 +272,6 @@ else:
                                 update_global_consecutive(global_consecutivo_ws, global_consecutive)
                                 st.success("✅ Datos guardados en Google Sheets.")
 
-                                # Botón de descarga para el archivo TXT
                                 st.download_button(
                                     label="⬇️ Descargar Archivo TXT para el ERP",
                                     data=txt_content.encode('utf-8'),
