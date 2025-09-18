@@ -146,7 +146,7 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
                 linea_debito = "|".join([
                     fecha, str(global_consecutive), cuenta_destino, tipo_documento,
                     f"Consolidado Recibos {recibos} - {clientes_grupo}", # Comentario ahora muestra clientes
-                    str(series_numeric), str(series_consecutive),         # Columna 6 es la serie numérica
+                    str(series_numeric), str(series_consecutive),          # Columna 6 es la serie numérica
                     str(valor_total), "0", "0", nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea_debito)
@@ -154,12 +154,18 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
     # --- 3. NUEVO: GENERAR LÍNEA DE CRÉDITO ÚNICA Y CONSOLIDADA ---
     if not df.empty and txt_lines: # Solo se añade si se generaron líneas de débito.
         total_valor = df['Valor Efectivo'].sum()
-        clientes = ", ".join(df['Cliente'].unique())
         primera_fecha = pd.to_datetime(df['Fecha'].iloc[0], dayfirst=True).strftime('%d/%m/%Y')
+        
+        # --- CAMBIO SOLICITADO ---
+        # En lugar de listar todos los clientes, se muestra el rango de recibos.
+        min_recibo = int(df['Recibo N°'].min())
+        max_recibo = int(df['Recibo N°'].max())
+        comentario_credito = f"Consolidado Recibos del {min_recibo} al {max_recibo}"
+        # --- FIN DEL CAMBIO ---
 
         linea_credito_unica = "|".join([
             primera_fecha, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
-            f"Consolidado Clientes: {clientes}", # Comentario con todos los clientes
+            comentario_credito, # Comentario modificado
             str(series_numeric), str(series_consecutive),
             "0", str(total_valor), "0", "0", "0", "0"
         ])
@@ -214,7 +220,10 @@ def update_global_consecutive(global_consecutivo_ws, new_consecutive):
     Actualiza el último número consecutivo global en la celda B1.
     """
     try:
-        global_consecutivo_ws.update('B1', new_consecutive)
+        # --- CORRECCIÓN DEL ERROR APIError ---
+        # Se usa update_acell para actualizar una única celda, que es el método correcto.
+        global_consecutivo_ws.update_acell('B1', new_consecutive)
+        # --- FIN DE LA CORRECCIÓN ---
     except Exception as e:
         st.error(f"Error actualizando el consecutivo global: {e}")
 
