@@ -31,8 +31,7 @@ def connect_to_gsheet():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
         client = gspread.authorize(creds)
         
-        # --- CORRECCIÓN APLICADA AQUÍ ---
-        # Se abre el libro de cálculo usando su nombre real en lugar de buscarlo en secrets.
+        # Se abre el libro de cálculo usando su nombre real.
         spreadsheet_name = "Planillas_Ferreinox"
         sheet = client.open(spreadsheet_name)
         
@@ -184,10 +183,21 @@ else:
                 df_cleaned.dropna(subset=['NUMRECIBO'], inplace=True)
                 df_cleaned.dropna(how='all', inplace=True)
 
+                # --- FUNCIÓN CORREGIDA ---
                 def clean_and_convert(value):
                     try:
-                        return float(str(value).split('\n')[0].replace('$', '').replace('.', '').replace(',', ''))
+                        # Convierte el valor a string para asegurar el manejo
+                        str_value = str(value).split('\n')[0]
+                        # 1. Quita el símbolo de moneda
+                        str_value = str_value.replace('$', '')
+                        # 2. Quita el separador de miles (.)
+                        str_value = str_value.replace('.', '')
+                        # 3. Reemplaza el separador decimal (,) por un punto (.)
+                        str_value = str_value.replace(',', '.')
+                        # Convierte a float
+                        return float(str_value)
                     except (ValueError, IndexError):
+                        # Si falla la conversión, retorna None
                         return None
                 
                 df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
@@ -214,7 +224,7 @@ else:
                 else:
                     st.subheader("📊 Resumen del Día")
                     total_recibos = df_resumen['Valor Efectivo'].sum()
-                    st.metric(label="💰 Total Efectivo Recaudado", value=f"${total_recibos:,.0f}".replace(",", "."))
+                    st.metric(label="💰 Total Efectivo Recaudado", value=f"${total_recibos:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                     st.divider()
 
                     st.subheader("Asigna el Destino del Efectivo")
@@ -231,7 +241,7 @@ else:
                                 options=opciones_destino,
                                 required=True
                             ),
-                            "Valor Efectivo": st.column_config.NumberColumn("Valor Efectivo", format="$ %.0f", disabled=True),
+                            "Valor Efectivo": st.column_config.NumberColumn("Valor Efectivo", format="$ %.2f", disabled=True),
                             "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
                             "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
                             "Recibo N°": st.column_config.TextColumn("Recibo N°", disabled=True),
