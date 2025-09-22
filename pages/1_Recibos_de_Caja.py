@@ -21,7 +21,7 @@ st.set_page_config(layout="wide", page_title="Recibos de Caja")
 st.title("🧾 Procesamiento de Recibos de Caja v4.2 (con Descarga Independiente)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
-1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por fecha y serie para descargar sus archivos.
+1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
 2.  **Cargar un nuevo archivo de Excel**: Procesa y guarda un nuevo grupo de recibos.
 3.  **Buscar y editar un grupo existente**: Carga un grupo para editarlo y volver a guardarlo.
 """)
@@ -408,107 +408,120 @@ else:
     # --- NUEVA SECCIÓN: DESCARGAR REPORTES ANTERIORES (SIEMPRE VISIBLE) ---
     st.divider()
     with st.expander("📥 Descargar Reportes Anteriores", expanded=False):
-        st.info("Busca un grupo por fecha y serie para generar y descargar sus archivos al instante.")
+        st.info("Busca un grupo por un rango de fechas y serie para generar y descargar sus archivos al instante.")
         
-        dl_col1, dl_col2, dl_col3 = st.columns([1, 1, 2])
+        dl_col1, dl_col2, dl_col3 = st.columns(3)
         with dl_col1:
-            download_date = st.date_input("Fecha a buscar:", datetime.now(), key="dl_date")
+            start_date = st.date_input("Fecha de inicio:", datetime.now(), key="dl_start_date")
         with dl_col2:
+            end_date = st.date_input("Fecha de fin:", datetime.now(), key="dl_end_date")
+        with dl_col3:
             download_serie = st.selectbox("Serie a buscar:", options=series_disponibles, key="dl_serie")
         
         if st.button("Buscar Grupos para Descargar", use_container_width=True):
-            try:
-                all_values = registros_recibos_ws.get_all_values()
-                if len(all_values) > 1:
-                    headers = all_values[0]
-                    data = all_values[1:]
-                    all_records_df = pd.DataFrame(data, columns=headers)
-                    
-                    # Limpieza de datos
-                    if '' in all_records_df.columns:
-                        all_records_df = all_records_df.drop(columns=[''])
-                    
-                    download_date_str = download_date.strftime('%d/%m/%Y')
-                    
-                    # Filtrar por fecha y serie
-                    filtered_df = all_records_df[
-                        (all_records_df['Fecha'] == download_date_str) &
-                        (all_records_df['Serie'] == download_serie)
-                    ].copy()
+            if end_date < start_date:
+                st.error("Error: La fecha de fin no puede ser anterior a la fecha de inicio.")
+            else:
+                try:
+                    all_values = registros_recibos_ws.get_all_values()
+                    if len(all_values) > 1:
+                        headers = all_values[0]
+                        data = all_values[1:]
+                        all_records_df = pd.DataFrame(data, columns=headers)
+                        
+                        # Limpieza de datos
+                        if '' in all_records_df.columns:
+                            all_records_df = all_records_df.drop(columns=[''])
+                        
+                        # Convertir la columna de fecha a formato datetime para poder comparar rangos
+                        all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
+                        all_records_df.dropna(subset=['Fecha_dt'], inplace=True) # Eliminar filas con fechas inválidas
 
-                    if not filtered_df.empty:
-                        # Asegurar tipos de datos para agregación
-                        filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
-                        filtered_df.dropna(subset=['Valor Efectivo'], inplace=True)
+                        # Convertir fechas de los inputs a datetime para la comparación
+                        start_date_dt = pd.to_datetime(start_date)
+                        end_date_dt = pd.to_datetime(end_date)
                         
-                        st.session_state.downloadable_groups_df = filtered_df.groupby('Consecutivo Global').agg(
-                            Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x).min()}-{pd.to_numeric(x).max()}"),
-                            Total=('Valor Efectivo', 'sum')
-                        ).reset_index()
-                        
-                        st.session_state.full_download_data = filtered_df # Guardar datos completos para la descarga
+                        # Filtrar por rango de fechas y serie
+                        filtered_df = all_records_df[
+                            (all_records_df['Fecha_dt'] >= start_date_dt) &
+                            (all_records_df['Fecha_dt'] <= end_date_dt) &
+                            (all_records_df['Serie'] == download_serie)
+                        ].copy()
+
+                        if not filtered_df.empty:
+                            # Asegurar tipos de datos para agregación
+                            filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
+                            filtered_df['Recibo N°'] = pd.to_numeric(filtered_df['Recibo N°'], errors='coerce')
+                            filtered_df.dropna(subset=['Valor Efectivo', 'Recibo N°'], inplace=True)
+                            
+                            st.session_state.downloadable_groups_df = filtered_df.groupby('Consecutivo Global').agg(
+                                Recibos=('Recibo N°', lambda x: f"{int(x.min())}-{int(x.max())}"),
+                                Total=('Valor Efectivo', 'sum')
+                            ).reset_index()
+                            
+                            st.session_state.full_download_data = filtered_df # Guardar datos completos para la descarga
+                        else:
+                            st.warning("No se encontraron grupos para el rango de fechas y serie seleccionados.")
+                            st.session_state.downloadable_groups_df = pd.DataFrame() # Limpiar resultados
                     else:
-                        st.warning("No se encontraron grupos para la fecha y serie seleccionadas.")
-                        st.session_state.downloadable_groups_df = pd.DataFrame() # Limpiar resultados
-                else:
-                    st.warning("No hay registros guardados para buscar.")
-            except Exception as e:
-                st.error(f"Ocurrió un error al buscar los registros: {e}")
+                        st.warning("No hay registros guardados para buscar.")
+                except Exception as e:
+                    st.error(f"Ocurrió un error al buscar los registros: {e}")
 
-        if 'downloadable_groups_df' in st.session_state and not st.session_state.downloadable_groups_df.empty:
+    if 'downloadable_groups_df' in st.session_state and not st.session_state.downloadable_groups_df.empty:
+        
+        group_options = {
+            f"Global {row['Consecutivo Global']} (Recibos {row['Recibos']}, Total ${row['Total']:,.2f})": row['Consecutivo Global']
+            for _, row in st.session_state.downloadable_groups_df.iterrows()
+        }
+        
+        selected_group_display = st.selectbox(
+            "Selecciona un grupo para preparar su descarga:",
+            options=["-- Elige un grupo --"] + list(group_options.keys())
+        )
+
+        if selected_group_display != "-- Elige un grupo --":
+            global_consecutive_to_download = group_options[selected_group_display]
             
-            group_options = {
-                f"Global {row['Consecutivo Global']} (Recibos {row['Recibos']}, Total ${row['Total']:,.2f})": row['Consecutivo Global']
-                for _, row in st.session_state.downloadable_groups_df.iterrows()
-            }
+            # Filtrar el DF completo para obtener solo los datos del grupo seleccionado
+            df_for_download = st.session_state.full_download_data[
+                st.session_state.full_download_data['Consecutivo Global'].astype(str) == str(global_consecutive_to_download)
+            ].copy()
+
+            # Asegurar tipos correctos para las funciones de generación
+            df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'])
+            df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'])
+            df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'])
             
-            selected_group_display = st.selectbox(
-                "Selecciona un grupo para preparar su descarga:",
-                options=["-- Elige un grupo --"] + list(group_options.keys())
-            )
+            # Obtener los datos necesarios para generar los archivos desde la primera fila
+            series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
+            serie_dl = df_for_download['Serie'].iloc[0]
 
-            if selected_group_display != "-- Elige un grupo --":
-                global_consecutive_to_download = group_options[selected_group_display]
-                
-                # Filtrar el DF completo para obtener solo los datos del grupo seleccionado
-                df_for_download = st.session_state.full_download_data[
-                    st.session_state.full_download_data['Consecutivo Global'].astype(str) == str(global_consecutive_to_download)
-                ].copy()
+            # Generar contenido de los archivos
+            txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
+            excel_file_dl = generate_excel_report(df_for_download)
 
-                # Asegurar tipos correctos para las funciones de generación
-                df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'])
-                df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'])
-                df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'])
-                
-                # Obtener los datos necesarios para generar los archivos desde la primera fila
-                series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
-                serie_dl = df_for_download['Serie'].iloc[0]
-
-                # Generar contenido de los archivos
-                txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
-                excel_file_dl = generate_excel_report(df_for_download)
-
-                st.success(f"Archivos para el grupo Global {global_consecutive_to_download} listos para descargar.")
-                
-                dl_btn_col1, dl_btn_col2 = st.columns(2)
-                with dl_btn_col1:
-                    st.download_button(
-                        label="⬇️ Descargar Archivo TXT para el ERP",
-                        data=txt_content_dl.encode('utf-8'),
-                        file_name=f"recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                        key=f"dl_txt_{global_consecutive_to_download}"
-                    )
-                with dl_btn_col2:
-                    st.download_button(
-                        label="📄 Descargar Reporte en Excel",
-                        data=excel_file_dl,
-                        file_name=f"Reporte_Recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                        key=f"dl_xls_{global_consecutive_to_download}"
-                    )
+            st.success(f"Archivos para el grupo Global {global_consecutive_to_download} listos para descargar.")
+            
+            dl_btn_col1, dl_btn_col2 = st.columns(2)
+            with dl_btn_col1:
+                st.download_button(
+                    label="⬇️ Descargar Archivo TXT para el ERP",
+                    data=txt_content_dl.encode('utf-8'),
+                    file_name=f"recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key=f"dl_txt_{global_consecutive_to_download}"
+                )
+            with dl_btn_col2:
+                st.download_button(
+                    label="📄 Descargar Reporte en Excel",
+                    data=excel_file_dl,
+                    file_name=f"Reporte_Recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key=f"dl_xls_{global_consecutive_to_download}"
+                )
     st.divider()
 
     # --- SECCIÓN PRINCIPAL DE PROCESAMIENTO ---
