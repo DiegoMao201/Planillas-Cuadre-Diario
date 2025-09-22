@@ -18,11 +18,12 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.1 (con Edición y Excel)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.2 (con Descarga Independiente)")
 st.markdown("""
-Esta herramienta permite dos flujos de trabajo:
-1.  **Cargar un nuevo archivo de Excel** para procesar y guardar un nuevo grupo de recibos.
-2.  **Buscar y cargar un grupo existente** para editarlo y volver a guardarlo.
+Esta herramienta ahora permite tres flujos de trabajo:
+1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por fecha y serie para descargar sus archivos.
+2.  **Cargar un nuevo archivo de Excel**: Procesa y guarda un nuevo grupo de recibos.
+3.  **Buscar y editar un grupo existente**: Carga un grupo para editarlo y volver a guardarlo.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
@@ -404,6 +405,114 @@ else:
         st.session_state.editing_info = {}
         st.session_state.found_groups = []
 
+    # --- NUEVA SECCIÓN: DESCARGAR REPORTES ANTERIORES (SIEMPRE VISIBLE) ---
+    st.divider()
+    with st.expander("📥 Descargar Reportes Anteriores", expanded=False):
+        st.info("Busca un grupo por fecha y serie para generar y descargar sus archivos al instante.")
+        
+        dl_col1, dl_col2, dl_col3 = st.columns([1, 1, 2])
+        with dl_col1:
+            download_date = st.date_input("Fecha a buscar:", datetime.now(), key="dl_date")
+        with dl_col2:
+            download_serie = st.selectbox("Serie a buscar:", options=series_disponibles, key="dl_serie")
+        
+        if st.button("Buscar Grupos para Descargar", use_container_width=True):
+            try:
+                all_values = registros_recibos_ws.get_all_values()
+                if len(all_values) > 1:
+                    headers = all_values[0]
+                    data = all_values[1:]
+                    all_records_df = pd.DataFrame(data, columns=headers)
+                    
+                    # Limpieza de datos
+                    if '' in all_records_df.columns:
+                        all_records_df = all_records_df.drop(columns=[''])
+                    
+                    download_date_str = download_date.strftime('%d/%m/%Y')
+                    
+                    # Filtrar por fecha y serie
+                    filtered_df = all_records_df[
+                        (all_records_df['Fecha'] == download_date_str) &
+                        (all_records_df['Serie'] == download_serie)
+                    ].copy()
+
+                    if not filtered_df.empty:
+                        # Asegurar tipos de datos para agregación
+                        filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
+                        filtered_df.dropna(subset=['Valor Efectivo'], inplace=True)
+                        
+                        st.session_state.downloadable_groups_df = filtered_df.groupby('Consecutivo Global').agg(
+                            Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x).min()}-{pd.to_numeric(x).max()}"),
+                            Total=('Valor Efectivo', 'sum')
+                        ).reset_index()
+                        
+                        st.session_state.full_download_data = filtered_df # Guardar datos completos para la descarga
+                    else:
+                        st.warning("No se encontraron grupos para la fecha y serie seleccionadas.")
+                        st.session_state.downloadable_groups_df = pd.DataFrame() # Limpiar resultados
+                else:
+                    st.warning("No hay registros guardados para buscar.")
+            except Exception as e:
+                st.error(f"Ocurrió un error al buscar los registros: {e}")
+
+        if 'downloadable_groups_df' in st.session_state and not st.session_state.downloadable_groups_df.empty:
+            
+            group_options = {
+                f"Global {row['Consecutivo Global']} (Recibos {row['Recibos']}, Total ${row['Total']:,.2f})": row['Consecutivo Global']
+                for _, row in st.session_state.downloadable_groups_df.iterrows()
+            }
+            
+            selected_group_display = st.selectbox(
+                "Selecciona un grupo para preparar su descarga:",
+                options=["-- Elige un grupo --"] + list(group_options.keys())
+            )
+
+            if selected_group_display != "-- Elige un grupo --":
+                global_consecutive_to_download = group_options[selected_group_display]
+                
+                # Filtrar el DF completo para obtener solo los datos del grupo seleccionado
+                df_for_download = st.session_state.full_download_data[
+                    st.session_state.full_download_data['Consecutivo Global'].astype(str) == str(global_consecutive_to_download)
+                ].copy()
+
+                # Asegurar tipos correctos para las funciones de generación
+                df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'])
+                df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'])
+                df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'])
+                
+                # Obtener los datos necesarios para generar los archivos desde la primera fila
+                series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
+                serie_dl = df_for_download['Serie'].iloc[0]
+
+                # Generar contenido de los archivos
+                txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
+                excel_file_dl = generate_excel_report(df_for_download)
+
+                st.success(f"Archivos para el grupo Global {global_consecutive_to_download} listos para descargar.")
+                
+                dl_btn_col1, dl_btn_col2 = st.columns(2)
+                with dl_btn_col1:
+                    st.download_button(
+                        label="⬇️ Descargar Archivo TXT para el ERP",
+                        data=txt_content_dl.encode('utf-8'),
+                        file_name=f"recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.txt",
+                        mime="text/plain",
+                        use_container_width=True,
+                        key=f"dl_txt_{global_consecutive_to_download}"
+                    )
+                with dl_btn_col2:
+                    st.download_button(
+                        label="📄 Descargar Reporte en Excel",
+                        data=excel_file_dl,
+                        file_name=f"Reporte_Recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key=f"dl_xls_{global_consecutive_to_download}"
+                    )
+    st.divider()
+
+    # --- SECCIÓN PRINCIPAL DE PROCESAMIENTO ---
+    st.header("Flujo de Trabajo: Procesar o Editar")
     st.subheader("1. Elige una opción")
 
     # Botones para seleccionar el modo de trabajo
@@ -425,14 +534,12 @@ else:
             st.session_state.mode = 'edit'
             st.rerun()
             
-    st.divider()
-
     # --- MODO EDICIÓN: BUSCAR Y CARGAR GRUPO ---
     if st.session_state.mode == 'edit':
-        st.header("✏️ Editar Grupo de Recibos")
+        st.subheader("2. Buscar y Cargar Grupo para Edición")
         st.info("Busca un grupo de recibos que ya hayas procesado para cargarlo y modificarlo.")
         
-        with st.expander("Buscar Grupo de Recibos", expanded=True):
+        with st.container(border=True):
             search_col1, search_col2 = st.columns(2)
             with search_col1:
                 search_date = st.date_input("Fecha de los recibos:", datetime.now())
@@ -440,7 +547,7 @@ else:
             with search_col2:
                 search_serie = st.selectbox("Serie de los recibos:", options=series_disponibles, key="search_serie")
             
-            if st.button("Buscar Grupos", use_container_width=True):
+            if st.button("Buscar Grupos para Editar", use_container_width=True):
                 try:
                     all_values = registros_recibos_ws.get_all_values()
                     
@@ -470,7 +577,7 @@ else:
                         if not filtered_df.empty:
                             # Agrupar para mostrar al usuario
                             st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
-                                Recibos=('Recibo N°', lambda x: f"{x.min()}-{x.max()}"),
+                                Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x).min()}-{pd.to_numeric(x).max()}"),
                                 Total=('Valor Efectivo', lambda x: pd.to_numeric(x).sum())
                             ).reset_index()
                             st.session_state.full_search_results = all_records_df # Guardar resultados completos
@@ -493,7 +600,7 @@ else:
                 }
                 
                 selected_group_display = st.selectbox(
-                    "Selecciona el grupo que deseas cargar:",
+                    "Selecciona el grupo que deseas cargar para editar:",
                     options=list(group_options.keys())
                 )
 
@@ -522,20 +629,20 @@ else:
 
     # --- MODO NUEVO: CARGAR ARCHIVO EXCEL ---
     elif st.session_state.mode == 'new':
-        st.header("🆕 Procesar Nuevo Grupo de Recibos")
+        st.subheader("2. Cargar Nuevo Archivo")
         
-        st.subheader("A. Selecciona la Serie del Documento")
-        serie_seleccionada = st.selectbox(
-            "Elige la serie que corresponde a los recibos de este archivo:",
-            options=series_disponibles, index=0, help="Esta serie se usará en el archivo TXT final."
-        )
-        st.divider()
-
-        st.subheader("B. Carga el Archivo de Excel")
-        uploaded_file = st.file_uploader(
-            "📂 Sube tu archivo de Excel de recibos de caja",
-            type=['xlsx', 'xls']
-        )
+        with st.container(border=True):
+            st.markdown("##### A. Selecciona la Serie del Documento")
+            serie_seleccionada = st.selectbox(
+                "Elige la serie que corresponde a los recibos de este archivo:",
+                options=series_disponibles, index=0, help="Esta serie se usará en el archivo TXT final."
+            )
+            
+            st.markdown("##### B. Carga el Archivo de Excel")
+            uploaded_file = st.file_uploader(
+                "📂 Sube tu archivo de Excel de recibos de caja",
+                type=['xlsx', 'xls']
+            )
 
         if uploaded_file is not None:
             if 'df_procesado' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
@@ -589,7 +696,7 @@ else:
     # --- TABLA DE EDICIÓN Y PROCESAMIENTO (COMÚN PARA AMBOS MODOS) ---
     if 'df_procesado' in st.session_state and not st.session_state.df_procesado.empty:
         st.divider()
-        st.header("2. Asigna Agrupación y Destinos")
+        st.header("3. Asigna Agrupación y Destinos")
         
         total_recibos = st.session_state.df_procesado['Valor Efectivo'].sum()
         st.metric(label="💰 Total Efectivo del Grupo", value=f"${total_recibos:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -623,7 +730,7 @@ else:
         )
         
         st.divider()
-        st.header("3. Finalizar Proceso")
+        st.header("4. Finalizar Proceso")
         
         if st.button("💾 Procesar y Guardar Cambios", type="primary", use_container_width=True):
             if edited_df['Destino'].isnull().any() or any(d == "-- Seleccionar --" for d in edited_df['Destino']):
@@ -676,7 +783,7 @@ else:
                     st.success("✅ ¡Éxito! Los datos han sido guardados en Google Sheets.")
 
                     # Ofrecer la descarga de los archivos generados
-                    st.subheader("4. Descargar Archivos")
+                    st.subheader("5. Descargar Archivos")
                     
                     dl_col1, dl_col2 = st.columns(2)
                     with dl_col1:
@@ -695,7 +802,7 @@ else:
                             file_name=f"Reporte_Recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
-                         )
+                          )
 
                     # Limpiar estado para la siguiente operación
                     for key in list(st.session_state.keys()):
