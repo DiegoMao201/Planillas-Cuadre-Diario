@@ -6,14 +6,16 @@ import pandas as pd
 from io import BytesIO
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-import json
 from datetime import datetime
+# Importaciones para la generación y estilo del Excel
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 # --- CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT ---
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.0 (con Edición)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.0 (con Edición y Excel)")
 st.markdown("""
 Esta herramienta permite dos flujos de trabajo:
 1.  **Cargar un nuevo archivo de Excel** para procesar y guardar un nuevo grupo de recibos.
@@ -162,6 +164,114 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 
     return "\n".join(txt_lines)
 
+# --- NUEVA FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
+def generate_excel_report(df):
+    """
+    Genera un archivo Excel profesional y estilizado con subtotales por cliente.
+    """
+    output = BytesIO()
+    
+    # Ordenar por cliente para agrupar visualmente
+    df_sorted = df.sort_values(by='Cliente').copy()
+    
+    # Crear un nuevo DataFrame para el reporte que contendrá los datos y los subtotales
+    report_data = []
+    
+    # Columnas que se mostrarán en el Excel
+    excel_columns = ['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
+
+    # Iterar por cada cliente para agregar sus recibos y un subtotal
+    for cliente, group in df_sorted.groupby('Cliente'):
+        # Añadir las filas de datos del cliente
+        for _, row in group.iterrows():
+            report_data.append(row[excel_columns].tolist())
+            
+        # Calcular y añadir la fila de subtotal
+        subtotal = group['Valor Efectivo'].sum()
+        subtotal_row = ['', '', f'Subtotal {cliente}', subtotal, '', '']
+        report_data.append(subtotal_row)
+
+    # Convertir la lista de listas a un DataFrame de pandas
+    report_df = pd.DataFrame(report_data, columns=excel_columns)
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        report_df.to_excel(writer, index=False, sheet_name='Recibos de Caja')
+        workbook = writer.book
+        worksheet = writer.sheets['Recibos de Caja']
+
+        # --- Definición de Estilos ---
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        
+        subtotal_font = Font(bold=True)
+        subtotal_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+        
+        total_font = Font(bold=True, size=12)
+        total_fill = PatternFill(start_color="C0C0C0", end_color="C0C0C0", fill_type="solid")
+
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        currency_format = '$ #,##0.00'
+
+        # Aplicar estilo al encabezado
+        for cell in worksheet["1:1"]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # Aplicar estilo a las filas de datos y subtotales
+        for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
+            # Identificar si es una fila de subtotal por el texto
+            is_subtotal_row = str(row[2].value).startswith('Subtotal')
+            
+            for cell in row:
+                cell.border = thin_border
+                if is_subtotal_row:
+                    cell.font = subtotal_font
+                    cell.fill = subtotal_fill
+                
+            # Formatear la columna de valor
+            valor_cell = worksheet[f'D{row_idx}']
+            if isinstance(valor_cell.value, (int, float)):
+                 valor_cell.number_format = currency_format
+            
+            # Alinear las celdas
+            worksheet[f'B{row_idx}'].alignment = Alignment(horizontal='center')
+            worksheet[f'D{row_idx}'].alignment = Alignment(horizontal='right')
+            worksheet[f'E{row_idx}'].alignment = Alignment(horizontal='center')
+            
+        # --- Añadir Fila de Total General ---
+        grand_total = df['Valor Efectivo'].sum()
+        total_row_idx = worksheet.max_row + 1
+        worksheet[f'C{total_row_idx}'] = 'TOTAL GENERAL'
+        worksheet[f'D{total_row_idx}'] = grand_total
+        
+        # Aplicar estilo a la fila de total general
+        total_range = f'A{total_row_idx}:F{total_row_idx}'
+        for row in worksheet[total_range]:
+            for cell in row:
+                cell.font = total_font
+                cell.fill = total_fill
+                cell.border = thin_border
+        worksheet[f'D{total_row_idx}'].number_format = currency_format
+        worksheet[f'D{total_row_idx}'].alignment = Alignment(horizontal='right')
+
+
+        # --- Ajustar el ancho de las columnas ---
+        for col_idx, column in enumerate(worksheet.columns, 1):
+            max_length = 0
+            column_letter = openpyxl.utils.get_column_letter(col_idx)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+
+    return output.getvalue()
+
+
 # --- FUNCIONES PARA MANEJAR CONSECUTIVOS ---
 def get_next_series_consecutive(consecutivos_ws, series_name):
     """Obtiene el siguiente número consecutivo para una serie específica."""
@@ -204,7 +314,7 @@ def update_global_consecutive(global_consecutivo_ws, new_consecutive):
     except Exception as e:
         st.error(f"Error actualizando el consecutivo global: {e}")
 
-# --- NUEVA FUNCIÓN PARA BORRAR REGISTROS ANTES DE ACTUALIZAR ---
+# --- FUNCIÓN PARA BORRAR REGISTROS ANTES DE ACTUALIZAR ---
 def delete_existing_records(ws, global_consecutive_to_delete):
     """
     Encuentra y borra todas las filas en la hoja que coincidan con un consecutivo global.
@@ -522,8 +632,9 @@ else:
                         # PASO CLAVE: Borrar los registros antiguos antes de guardar los nuevos
                         delete_existing_records(registros_recibos_ws, global_consecutive)
 
-                    # Generar el contenido del archivo TXT
+                    # Generar el contenido del archivo TXT y el reporte Excel
                     txt_content = generate_txt_content(edited_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
+                    excel_file = generate_excel_report(edited_df)
 
                     # Preparar los datos para guardar en Google Sheets
                     registros_data = []
@@ -544,21 +655,35 @@ else:
                     
                     st.success("✅ ¡Éxito! Los datos han sido guardados en Google Sheets.")
 
-                    # Ofrecer la descarga del archivo TXT
-                    st.download_button(
-                        label="⬇️ Descargar Archivo TXT para el ERP",
-                        data=txt_content.encode('utf-8'),
-                        file_name=f"recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.txt",
-                        mime="text/plain"
-                    )
-                    st.info("El archivo TXT ha sido generado y está listo para descargar.")
+                    # Ofrecer la descarga de los archivos generados
+                    st.subheader("4. Descargar Archivos")
+                    
+                    dl_col1, dl_col2 = st.columns(2)
+                    with dl_col1:
+                        st.download_button(
+                            label="⬇️ Descargar Archivo TXT para el ERP",
+                            data=txt_content.encode('utf-8'),
+                            file_name=f"recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+                    
+                    with dl_col2:
+                         st.download_button(
+                            label="📄 Descargar Reporte en Excel",
+                            data=excel_file,
+                            file_name=f"Reporte_Recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
 
                     # Limpiar estado para la siguiente operación
                     for key in list(st.session_state.keys()):
                         if key not in ['mode', 'google_credentials']:
                             del st.session_state[key]
                     st.session_state.mode = 'new' # Volver al modo por defecto
-                    # st.rerun() # Opcional: recargar la página para un estado completamente limpio
+                    # Opcional: recargar la página para un estado completamente limpio
+                    # st.rerun() 
 
                 except Exception as e:
-                    st.error(f"Error al guardar los datos o generar el archivo TXT: {e}")
+                    st.error(f"Error al guardar los datos o generar los archivos: {e}")
