@@ -7,6 +7,9 @@ from io import BytesIO
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 from datetime import datetime
+from itertools import groupby
+from operator import itemgetter
+
 # Importaciones para la generación y estilo del Excel
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
@@ -15,7 +18,7 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.0 (con Edición y Excel)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.1 (con Edición y Excel)")
 st.markdown("""
 Esta herramienta permite dos flujos de trabajo:
 1.  **Cargar un nuevo archivo de Excel** para procesar y guardar un nuevo grupo de recibos.
@@ -164,7 +167,7 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 
     return "\n".join(txt_lines)
 
-# --- NUEVA FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
+# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado con subtotales por cliente.
@@ -232,7 +235,7 @@ def generate_excel_report(df):
             # Formatear la columna de valor
             valor_cell = worksheet[f'D{row_idx}']
             if isinstance(valor_cell.value, (int, float)):
-                 valor_cell.number_format = currency_format
+                valor_cell.number_format = currency_format
             
             # Alinear las celdas
             worksheet[f'B{row_idx}'].alignment = Alignment(horizontal='center')
@@ -314,10 +317,11 @@ def update_global_consecutive(global_consecutivo_ws, new_consecutive):
     except Exception as e:
         st.error(f"Error actualizando el consecutivo global: {e}")
 
-# --- FUNCIÓN PARA BORRAR REGISTROS ANTES DE ACTUALIZAR ---
+# --- FUNCIÓN PARA BORRAR REGISTROS (CORREGIDA PARA EVITAR ERROR 429) ---
 def delete_existing_records(ws, global_consecutive_to_delete):
     """
-    Encuentra y borra todas las filas en la hoja que coincidan con un consecutivo global.
+    Encuentra y borra todas las filas que coincidan con un consecutivo global.
+    Utiliza una solicitud por lotes (batch) para evitar errores de cuota de la API [429].
     """
     try:
         st.info(f"Buscando registros antiguos con el consecutivo global {global_consecutive_to_delete} para eliminarlos...")
@@ -326,6 +330,7 @@ def delete_existing_records(ws, global_consecutive_to_delete):
         
         if 'Consecutivo Global' not in df_records.columns:
             st.error("La hoja 'RegistrosRecibos' no tiene la columna 'Consecutivo Global'. No se puede actualizar.")
+            st.stop()
             return
 
         # Convertir a string para una comparación segura
@@ -337,21 +342,48 @@ def delete_existing_records(ws, global_consecutive_to_delete):
         
         # Los índices del DataFrame son 0-based, necesitamos sumar 2 para obtener el número de fila real en la hoja
         # (1 por la cabecera, 1 porque gspread es 1-based)
-        gspread_rows_to_delete = sorted([i + 2 for i in rows_to_delete_indices], reverse=True)
+        gspread_rows_to_delete = sorted([i + 2 for i in rows_to_delete_indices])
 
         if not gspread_rows_to_delete:
             st.warning("No se encontraron registros antiguos que coincidieran. Se procederá a guardar como si fueran nuevos.")
             return
 
-        # Borrar filas desde la última hasta la primera para evitar problemas con la reindexación
-        for row_index in gspread_rows_to_delete:
-            ws.delete_rows(row_index)
+        # --- INICIO DE LA CORRECCIÓN: BATCH DELETE ---
+        # En lugar de borrar fila por fila con un bucle, agrupamos las filas
+        # contiguas y las eliminamos en una sola llamada a la API.
+
+        requests = []
+        # Agrupar números consecutivos: ej [3, 4, 5, 8, 9, 11] -> grupos [3-5], [8-9], [11]
+        for k, g in groupby(enumerate(gspread_rows_to_delete), lambda i_x: i_x[0] - i_x[1]):
+            group = list(map(itemgetter(1), g))
+            start_index = group[0] - 1  # La API es 0-indexed, así que restamos 1
+            end_index = group[-1]
+            
+            # Crear una solicitud de eliminación para este rango de filas
+            requests.append({
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": ws.id,
+                        "dimension": "ROWS",
+                        "startIndex": start_index,
+                        "endIndex": end_index
+                    }
+                }
+            })
         
-        st.success(f"Se eliminaron {len(gspread_rows_to_delete)} registros antiguos con éxito.")
+        if requests:
+            # Es crucial revertir las solicitudes para que la eliminación de un rango
+            # no afecte los índices de los rangos siguientes.
+            requests.reverse()
+            # Enviar todas las solicitudes de eliminación en un solo lote.
+            ws.spreadsheet.batch_update({"requests": requests})
+            st.success(f"Se eliminaron {len(gspread_rows_to_delete)} registros antiguos en una sola operación por lotes.")
+        # --- FIN DE LA CORRECCIÓN ---
 
     except Exception as e:
+        # Si el error persiste, puede ser un problema diferente.
+        # El error original [429] debería estar solucionado.
         st.error(f"Error crítico al intentar borrar registros antiguos: {e}")
-        # Detener la ejecución si no se pueden borrar los registros para evitar duplicados
         st.stop()
 
 
@@ -410,30 +442,23 @@ else:
             
             if st.button("Buscar Grupos", use_container_width=True):
                 try:
-                    # --- INICIO DE LA CORRECCIÓN ---
-                    # Leer todos los valores en lugar de 'get_all_records' para evitar errores de cabecera duplicada.
                     all_values = registros_recibos_ws.get_all_values()
                     
-                    # Si la hoja tiene menos de 2 filas (solo cabecera o vacía), no hay datos que buscar.
                     if len(all_values) < 2:
                         all_records_df = pd.DataFrame()
                     else:
-                        # La primera fila son las cabeceras, el resto son los datos.
                         headers = all_values[0]
                         data = all_values[1:]
                         all_records_df = pd.DataFrame(data, columns=headers)
                         
-                        # Limpiar columnas con cabeceras vacías ('') que causan el error original.
                         if '' in all_records_df.columns:
                             all_records_df = all_records_df.drop(columns=[''])
                         
-                        # Verificar que las columnas necesarias existan después de la carga
                         required_search_cols = ['Fecha', 'Serie', 'Consecutivo Global', 'Recibo N°', 'Valor Efectivo']
                         for col in required_search_cols:
                             if col not in all_records_df.columns:
                                 st.error(f"Error crítico: La columna esperada '{col}' no se encontró en la hoja 'RegistrosRecibos'. Por favor, verifica la cabecera en Google Sheets.")
                                 st.stop()
-                    # --- FIN DE LA CORRECCIÓN ---
 
                     if not all_records_df.empty:
                         # Filtrar por fecha y serie
@@ -480,11 +505,6 @@ else:
                         st.session_state.full_search_results['Consecutivo Global'].astype(str) == str(global_consecutive_to_load)
                     ].copy()
 
-                    # Preparar el DataFrame para el editor
-                    group_data_df.rename(columns={
-                        'Recibo N°': 'Recibo N°', 'Valor Efectivo': 'Valor Efectivo'
-                    }, inplace=True)
-                    
                     # Asegurar tipos de datos correctos
                     group_data_df['Valor Efectivo'] = pd.to_numeric(group_data_df['Valor Efectivo'])
                     group_data_df['Agrupación'] = pd.to_numeric(group_data_df['Agrupación'])
@@ -675,15 +695,14 @@ else:
                             file_name=f"Reporte_Recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True
-                        )
+                         )
 
                     # Limpiar estado para la siguiente operación
                     for key in list(st.session_state.keys()):
                         if key not in ['mode', 'google_credentials']:
                             del st.session_state[key]
                     st.session_state.mode = 'new' # Volver al modo por defecto
-                    # Opcional: recargar la página para un estado completamente limpio
-                    # st.rerun() 
+                    # st.rerun() # Descomentar si deseas que la app se limpie y reinicie por completo
 
                 except Exception as e:
                     st.error(f"Error al guardar los datos o generar los archivos: {e}")
