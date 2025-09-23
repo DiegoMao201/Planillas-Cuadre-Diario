@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.2 (Corrección de Sintaxis y Columnas)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.3 (Corrección de Columnas Serie/Número)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -548,11 +548,13 @@ else:
             series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
             serie_dl = df_for_download['Serie'].iloc[0]
 
-            # --- NUEVO: Crear la columna unificada si los datos existen en los registros antiguos
-            if 'Serie' in df_for_download.columns and 'Número' in df_for_download.columns:
-                 df_for_download['Serie-Número'] = df_for_download['Serie'].astype(str) + "-" + df_for_download['Número'].astype(str)
+            # --- CORRECCIÓN: Crear la columna unificada usando 'Serie_Factura' y 'Numero_Factura'
+            if 'Serie_Factura' in df_for_download.columns and 'Numero_Factura' in df_for_download.columns:
+                s_factura = df_for_download['Serie_Factura'].fillna('S/D').astype(str)
+                n_factura = df_for_download['Numero_Factura'].fillna('S/D').astype(str)
+                df_for_download['Serie-Número'] = s_factura + "-" + n_factura
             else:
-                 df_for_download['Serie-Número'] = "N/A" # Placeholder si los datos antiguos no tienen esta info
+                df_for_download['Serie-Número'] = "N/A" # Placeholder si los datos antiguos no tienen esta info
 
             txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
             excel_file_dl = generate_excel_report(df_for_download)
@@ -734,14 +736,14 @@ else:
                         df.columns = df.columns.str.strip().str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                         
                         # 4. Mapear posibles nombres de columnas a un estándar interno.
-                        #    Se separa NUMRECIBO de NUMERO para evitar conflictos.
+                        #    CORRECCIÓN: Se renombran NUMERO y SERIE para evitar conflictos.
                         column_mapping = {
                             'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
                             'FECHA_RECIBO': ['FECHA_RECIBO', 'FECHA RECIBO', 'FECHA'],
                             'IMPORTE': ['IMPORTE', 'VALOR', 'TOTAL'],
-                            'NUMERO': ['NUMERO'], # Para la columna 'Número' de la factura
-                            'SERIE': ['SERIE']   # Para la columna 'Serie' de la factura
+                            'NUMERO_FACTURA': ['NUMERO'], # Para el número de la factura individual
+                            'SERIE_FACTURA': ['SERIE']   # Para la serie de la factura individual
                         }
                         
                         found_columns = {}
@@ -754,7 +756,8 @@ else:
                         df.rename(columns=found_columns, inplace=True)
 
                         # 5. Verificar que las columnas clave existan después del mapeo.
-                        required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE', 'NUMERO', 'SERIE']
+                        #    CORRECCIÓN: Se buscan los nuevos nombres de columna.
+                        required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE', 'NUMERO_FACTURA', 'SERIE_FACTURA']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
                             st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas: {', '.join(missing_columns)}")
@@ -783,6 +786,7 @@ else:
                             st.stop()
 
                         # 9. Renombrar columnas para uso interno y formatear fecha.
+                        #    Las columnas 'NUMERO_FACTURA' y 'SERIE_FACTURA' se mantienen con su nombre.
                         df_full_detail = df_cleaned.rename(columns={
                             'FECHA_RECIBO': 'Fecha', 'NUMRECIBO': 'Recibo N°',
                             'NOMBRECLIENTE': 'Cliente', 'IMPORTE_LIMPIO': 'Valor Efectivo'
@@ -900,9 +904,9 @@ else:
                             how='left'
                         )
 
-                        # <<<--- NUEVO: Crear la columna unificada 'Serie-Número' para los reportes
+                        # <<<--- CORRECCIÓN: Crear la columna unificada 'Serie-Número' para los reportes
                         # Se asegura de que ambas columnas sean string antes de unirlas.
-                        final_detailed_df['Serie-Número'] = final_detailed_df['SERIE'].astype(str) + "-" + final_detailed_df['NUMERO'].astype(str)
+                        final_detailed_df['Serie-Número'] = final_detailed_df['SERIE_FACTURA'].astype(str) + "-" + final_detailed_df['NUMERO_FACTURA'].astype(str)
 
                         # Usar el DataFrame detallado y actualizado para todas las operaciones finales
                         txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
@@ -922,6 +926,11 @@ else:
                         for col in gsheet_headers:
                             if col in registros_data_df.columns:
                                 registros_to_append[col] = registros_data_df[col]
+                            # CORRECCIÓN: Se renombraron las columnas con nombres de factura para evitar conflicto
+                            elif col == 'Serie_Factura' and 'SERIE_FACTURA' in registros_data_df.columns:
+                                registros_to_append[col] = registros_data_df['SERIE_FACTURA']
+                            elif col == 'Numero_Factura' and 'NUMERO_FACTURA' in registros_data_df.columns:
+                                registros_to_append[col] = registros_data_df['NUMERO_FACTURA']
                             else:
                                 registros_to_append[col] = ''
                         
