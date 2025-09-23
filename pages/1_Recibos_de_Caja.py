@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # --- IMPORTACIÓN DE LIBRERÍAS NECESARIAS ---
 import streamlit as st
 import pandas as pd
@@ -18,7 +20,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.9 (Lectura de Excel Estándar)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.0 (Manejo de Serie y Número de Factura)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -546,8 +548,11 @@ else:
             series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
             serie_dl = df_for_download['Serie'].iloc[0]
 
-            # Crear la columna unificada para el Excel de descarga
-            df_for_download['Serie-Número'] = serie_dl + "-" + df_for_download['Recibo N°'].astype(int).astype(str)
+            # --- NUEVO: Crear la columna unificada si los datos existen en los registros antiguos
+            if 'Serie' in df_for_download.columns and 'Número' in df_for_download.columns:
+                 df_for_download['Serie-Número'] = df_for_download['Serie'].astype(str) + "-" + df_for_download['Número'].astype(str)
+            else:
+                 df_for_download['Serie-Número'] = "N/A" # Placeholder si los datos antiguos no tienen esta info
 
             txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
             excel_file_dl = generate_excel_report(df_for_download)
@@ -891,8 +896,9 @@ else:
                             how='left'
                         )
 
-                        # Crear la columna unificada 'Serie-Número' para los reportes
-                        final_detailed_df['Serie-Número'] = serie_seleccionada + "-" + final_detailed_df['Recibo N°'].astype(int).astype(str)
+                        # <<<--- NUEVO: Crear la columna unificada 'Serie-Número' para los reportes
+                        # Se asegura de que ambas columnas sean string antes de unirlas.
+                        final_detailed_df['Serie-Número'] = final_detailed_df['SERIE'].astype(str) + "-" + final_detailed_df['NUMERO'].astype(str)
 
                         # Usar el DataFrame detallado y actualizado para todas las operaciones finales
                         txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
@@ -956,3 +962,4 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
+
