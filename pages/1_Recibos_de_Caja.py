@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.8 (Análisis y Carga Mejorados)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.9 (Lectura de Excel Estándar)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -681,21 +681,15 @@ else:
         if uploaded_file is not None:
             # Lógica para procesar el archivo solo una vez
             if 'df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
-                with st.spinner("Procesando archivo de Excel, por favor espera..."):
+                with st.spinner("Procesando archivo de Excel..."):
                     try:
-                        # 1. Cargar el archivo, especificando que la cabecera está en la primera fila (índice 0)
-                        # y que la segunda fila (índice 1, que suele estar vacía) debe ser omitida.
-                        st.info("Paso 1: Leyendo el archivo Excel desde la primera fila como cabecera...")
-                        time.sleep(1)
-                        df = pd.read_excel(uploaded_file, header=0, skiprows=[1])
+                        # 1. Cargar el archivo Excel. La cabecera está en la primera fila.
+                        df = pd.read_excel(uploaded_file, header=0)
 
-                        # --- CORRECCIÓN INTELIGENTE DE TOTALES Y COLUMNAS ---
-                        st.info("Paso 2: Estandarizando nombres de columnas (mayúsculas, sin espacios)...")
-                        time.sleep(1)
+                        # 2. Estandarizar nombres de columnas para mayor flexibilidad.
                         df.columns = df.columns.str.strip().str.upper()
-
-                        st.info("Paso 3: Buscando nombres de columna conocidos...")
-                        time.sleep(1)
+                        
+                        # 3. Mapear posibles nombres de columnas a un estándar interno.
                         column_mapping = {
                             'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
@@ -712,38 +706,21 @@ else:
                         
                         df.rename(columns=found_columns, inplace=True)
 
-                        st.info("Paso 4: Verificando que las columnas clave existan.")
-                        time.sleep(1)
+                        # 4. Verificar que las columnas clave existan después del mapeo.
                         required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
-                            st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas en el Excel: {', '.join(missing_columns)}")
-                            st.error("Por favor, asegúrate de que tu archivo Excel contenga columnas con nombres similares a 'RECIBO', 'CLIENTE', 'FECHA', 'IMPORTE'.")
-                            st.error(f"Columnas encontradas (estandarizadas): {list(df.columns)}")
+                            st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas: {', '.join(missing_columns)}")
                             st.stop()
                         
-                        st.info("Paso 5: Eliminando filas de totales y subtotales...")
-                        time.sleep(1)
-                        if len(df) > 2:
-                            df_cleaned = df.iloc[:-2].copy()
-                        else:
-                            df_cleaned = df.copy()
+                        # 5. Eliminar filas que no tengan un importe válido para limpiar el dataset.
+                        df_cleaned = df.dropna(subset=['IMPORTE']).copy()
 
-                        initial_rows = len(df_cleaned)
-                        df_cleaned.dropna(subset=['NOMBRECLIENTE', 'FECHA_RECIBO'], inplace=True)
-                        rows_after_cleaning = len(df_cleaned)
-                        st.info(f"Se eliminaron {initial_rows - rows_after_cleaning} filas de subtotales intermedios.")
-                        time.sleep(1)
-
-                        if df_cleaned.empty:
-                            st.warning("Advertencia: Después de la limpieza, no quedaron datos válidos. Revisa el contenido del archivo Excel.")
-                            st.stop()
-
-                        st.info("Paso 6: Rellenando información de recibos en las filas de detalle...")
-                        time.sleep(1)
+                        # 6. Rellenar datos en caso de que el reporte use celdas combinadas.
                         for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
                             df_cleaned[col] = df_cleaned[col].ffill()
-                        
+
+                        # 7. Limpiar y convertir la columna de importe a formato numérico.
                         def clean_and_convert(value):
                             if isinstance(value, (int, float)): return float(value)
                             try:
@@ -751,15 +728,14 @@ else:
                                 return float(str_value)
                             except (ValueError, TypeError): return None
                         
-                        st.info("Paso 7: Limpiando y convirtiendo los valores monetarios...")
-                        time.sleep(1)
                         df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
                         df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
 
                         if df_cleaned.empty:
-                            st.warning("Advertencia: Después de limpiar los importes, no quedaron datos válidos. Verifica la columna 'IMPORTE'.")
+                            st.warning("Advertencia: No se encontraron datos válidos en el archivo.")
                             st.stop()
 
+                        # 8. Renombrar columnas para uso interno y formatear fecha.
                         df_full_detail = df_cleaned.rename(columns={
                             'FECHA_RECIBO': 'Fecha', 'NUMRECIBO': 'Recibo N°',
                             'NOMBRECLIENTE': 'Cliente', 'IMPORTE_LIMPIO': 'Valor Efectivo'
@@ -770,8 +746,7 @@ else:
                         
                         st.session_state.df_full_detail = df_full_detail.copy()
 
-                        st.info("Paso 8: Agrupando los datos por número de recibo para la tabla de edición.")
-                        time.sleep(1)
+                        # 9. Agrupar por recibo para la vista de edición en la UI.
                         df_summary = df_full_detail.groupby('Recibo N°').agg(
                             Fecha=('Fecha', 'first'),
                             Cliente=('Cliente', 'first'),
@@ -785,7 +760,7 @@ else:
                         st.session_state.df_for_display = df_summary[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
                         st.session_state.uploaded_file_name = uploaded_file.name
                         st.session_state.editing_info = {'serie': serie_seleccionada}
-                        st.success("¡Archivo procesado! Ahora puedes asignar destinos y grupos en la tabla de abajo.")
+                        st.success("¡Archivo procesado! Ahora puedes asignar destinos y grupos.")
                         st.rerun()
 
                     except Exception as e:
