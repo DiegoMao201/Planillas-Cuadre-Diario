@@ -179,15 +179,14 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 
     return "\n".join(txt_lines)
 
-# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
+# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL (MODIFICADA) ---
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado.
-    - Muestra el detalle completo de cada recibo.
+    - Muestra el detalle completo de cada movimiento.
     - Ordena por Agrupación y luego por Recibo N°.
-    - Agrupa visualmente las consignaciones (Agrupación > 1).
-    - Añade subtotales para cada grupo de consignación.
-    - Añade subtotales por cliente para los recibos individuales (Agrupación = 1).
+    - Añade subtotales para cada recibo individual (Agrupación = 1).
+    - Añade subtotales para cada grupo de consignación (Agrupación > 1).
     """
     output = BytesIO()
     
@@ -198,6 +197,7 @@ def generate_excel_report(df):
     
     # Reordenar las columnas para una presentación lógica en Excel
     preferred_order = ['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
+    # Incluir cualquier otra columna que pueda venir del excel original
     excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order]
     df = df[excel_columns]
 
@@ -206,29 +206,33 @@ def generate_excel_report(df):
     df_grouped = df[df['Agrupación'] > 1].copy()
 
     # Ordenar cada sub-dataframe
-    df_individual.sort_values(by=['Cliente', 'Recibo N°'], inplace=True)
+    df_individual.sort_values(by=['Recibo N°'], inplace=True)
     df_grouped.sort_values(by=['Agrupación', 'Recibo N°'], inplace=True)
 
     report_data = []
 
-    # 2. Procesar recibos individuales con subtotal por cliente
+    # 2. Procesar recibos individuales con subtotal por número de recibo
     if not df_individual.empty:
-        for cliente, group in df_individual.groupby('Cliente', sort=False):
+        for recibo_num, group in df_individual.groupby('Recibo N°', sort=False):
+            # Agregar todas las filas (movimientos) de este recibo
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
+            # Agregar la fila de subtotal para este recibo
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
-            subtotal_row[2] = f'Subtotal {cliente}'
+            subtotal_row[2] = f'Subtotal Recibo N° {int(recibo_num)}'
             subtotal_row[3] = subtotal
             report_data.append(subtotal_row)
 
     # 3. Procesar consignaciones agrupadas con subtotal por grupo
     if not df_grouped.empty:
         for agrupacion_id, group in df_grouped.groupby('Agrupación', sort=False):
+            # Agregar todas las filas de este grupo de consignación
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
+            # Agregar la fila de subtotal para este grupo
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
             subtotal_row[2] = f'Subtotal Consignación Grupo {int(agrupacion_id)}'
@@ -264,6 +268,7 @@ def generate_excel_report(df):
 
         # Aplicar estilo a las filas de datos y subtotales
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
+            # Identificar si es una fila de subtotal por el texto en la tercera columna (Cliente)
             is_subtotal_row = str(row[2].value).startswith('Subtotal')
             
             for cell in row:
@@ -272,19 +277,30 @@ def generate_excel_report(df):
                     cell.font = subtotal_font
                     cell.fill = subtotal_fill
             
-            valor_cell = worksheet[f'D{row_idx}']
+            # Formatear la columna de Valor Efectivo como moneda
+            valor_cell_index = excel_columns.index('Valor Efectivo') + 1
+            valor_cell_letter = get_column_letter(valor_cell_index)
+            valor_cell = worksheet[f'{valor_cell_letter}{row_idx}']
             if isinstance(valor_cell.value, (int, float)):
                 valor_cell.number_format = currency_format
-            
-            worksheet[f'B{row_idx}'].alignment = Alignment(horizontal='center')
-            worksheet[f'D{row_idx}'].alignment = Alignment(horizontal='right')
-            worksheet[f'E{row_idx}'].alignment = Alignment(horizontal='center')
+
+            # Alinear columnas específicas
+            for col_name, align in [('Recibo N°', 'center'), ('Valor Efectivo', 'right'), ('Agrupación', 'center')]:
+                if col_name in excel_columns:
+                    col_idx = excel_columns.index(col_name) + 1
+                    col_letter = get_column_letter(col_idx)
+                    worksheet[f'{col_letter}{row_idx}'].alignment = Alignment(horizontal=align)
             
         # --- Añadir Fila de Total General ---
         grand_total = df['Valor Efectivo'].sum()
         total_row_idx = worksheet.max_row + 1
-        worksheet[f'C{total_row_idx}'] = 'TOTAL GENERAL'
-        worksheet[f'D{total_row_idx}'] = grand_total
+        
+        # Colocar el total general en las columnas correctas
+        cliente_col_idx = excel_columns.index('Cliente') + 1
+        valor_col_idx = excel_columns.index('Valor Efectivo') + 1
+        
+        worksheet.cell(row=total_row_idx, column=cliente_col_idx, value='TOTAL GENERAL')
+        worksheet.cell(row=total_row_idx, column=valor_col_idx, value=grand_total)
         
         total_range = f'A{total_row_idx}:{get_column_letter(worksheet.max_column)}{total_row_idx}'
         for row in worksheet[total_range]:
@@ -292,13 +308,17 @@ def generate_excel_report(df):
                 cell.font = total_font
                 cell.fill = total_fill
                 cell.border = thin_border
-        worksheet[f'D{total_row_idx}'].number_format = currency_format
-        worksheet[f'D{total_row_idx}'].alignment = Alignment(horizontal='right')
+        
+        total_valor_cell = worksheet.cell(row=total_row_idx, column=valor_col_idx)
+        total_valor_cell.number_format = currency_format
+        total_valor_cell.alignment = Alignment(horizontal='right')
 
         # --- Ajustar el ancho de las columnas ---
         for col_idx, column in enumerate(worksheet.columns, 1):
             max_length = 0
             column_letter = get_column_letter(col_idx)
+            
+            # Considerar el largo del encabezado
             if worksheet[f'{column_letter}1'].value:
                 max_length = len(str(worksheet[f'{column_letter}1'].value))
 
@@ -308,6 +328,7 @@ def generate_excel_report(df):
                         max_length = len(str(cell.value))
                 except:
                     pass
+            # Añadir un poco de espacio extra
             adjusted_width = (max_length + 2)
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
@@ -381,16 +402,18 @@ def delete_existing_records(ws, global_consecutive_to_delete):
 
         rows_to_delete_indices = df_records[df_records['Consecutivo Global'] == global_consecutive_to_delete].index.tolist()
         
+        # El índice de gspread es 1-based y la cabecera es la fila 1, por lo que los datos empiezan en la fila 2.
         gspread_rows_to_delete = sorted([i + 2 for i in rows_to_delete_indices])
 
         if not gspread_rows_to_delete:
             st.warning("No se encontraron registros antiguos que coincidieran. Se procederá a guardar como si fueran nuevos.")
             return
 
+        # Agrupar índices consecutivos para eliminar en rangos
         requests = []
         for k, g in groupby(enumerate(gspread_rows_to_delete), lambda i_x: i_x[0] - i_x[1]):
             group = list(map(itemgetter(1), g))
-            start_index = group[0] - 1
+            start_index = group[0] - 1 # El startIndex es 0-based
             end_index = group[-1]
             
             requests.append({
@@ -405,6 +428,7 @@ def delete_existing_records(ws, global_consecutive_to_delete):
             })
         
         if requests:
+            # Es más seguro eliminar desde el final hacia el principio para no alterar los índices de las siguientes operaciones.
             requests.reverse()
             ws.spreadsheet.batch_update({"requests": requests})
             st.success(f"Se eliminaron {len(gspread_rows_to_delete)} registros antiguos en una sola operación por lotes.")
@@ -455,6 +479,7 @@ else:
                             data = all_values[1:]
                             all_records_df = pd.DataFrame(data, columns=headers)
                             
+                            # Eliminar columnas vacías si existen
                             if '' in all_records_df.columns:
                                 all_records_df = all_records_df.drop(columns=[''])
                             
@@ -507,6 +532,7 @@ else:
                 st.session_state.full_download_data['Consecutivo Global'].astype(str) == str(global_consecutive_to_download)
             ].copy()
 
+            # Asegurar tipos de datos correctos para las funciones de generación
             df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'])
             df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'])
             df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'])
@@ -543,6 +569,7 @@ else:
     col_mode_1, col_mode_2, col_mode_3 = st.columns([1,1,2])
     with col_mode_1:
         if st.button("🆕 Procesar Nuevo Archivo", use_container_width=True, type="primary" if st.session_state.mode == 'new' else "secondary"):
+            # Limpiar estado de sesión para un nuevo ciclo
             keys_to_keep = ['mode', 'google_credentials']
             for key in list(st.session_state.keys()):
                 if key not in keys_to_keep:
@@ -634,6 +661,7 @@ else:
                         st.session_state.full_search_results['Consecutivo Global'].astype(str) == str(global_consecutive_to_load)
                     ].copy()
 
+                    # Asegurar tipos de datos correctos
                     group_data_df['Valor Efectivo'] = pd.to_numeric(group_data_df['Valor Efectivo'])
                     group_data_df['Agrupación'] = pd.to_numeric(group_data_df['Agrupación'])
                     
@@ -841,6 +869,7 @@ else:
                         # --- Combinar decisiones de la UI con los datos de detalle ---
                         df_full_detail = st.session_state.df_full_detail.copy()
                         
+                        # Eliminar columnas viejas de Agrupación/Destino si existen en el df de detalle para evitar conflictos
                         if 'Agrupación' in df_full_detail.columns:
                             df_full_detail = df_full_detail.drop(columns=['Agrupación'])
                         if 'Destino' in df_full_detail.columns:
@@ -857,12 +886,14 @@ else:
                         txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
                         excel_file = generate_excel_report(final_detailed_df)
 
+                        # Preparar datos para guardar en Google Sheets
                         registros_data_df = final_detailed_df.copy()
                         registros_data_df['Serie'] = serie_seleccionada
                         registros_data_df['Consecutivo Serie'] = series_consecutive
                         registros_data_df['Consecutivo Global'] = global_consecutive
                         registros_data_df['Timestamp'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
+                        # Alinear con las cabeceras de Google Sheets
                         gsheet_headers = registros_recibos_ws.row_values(1)
                         registros_to_append = pd.DataFrame(columns=gsheet_headers)
 
@@ -872,11 +903,13 @@ else:
                             else:
                                 registros_to_append[col] = ''
                         
+                        # Reordenar y convertir a lista de listas
                         registros_to_append = registros_to_append[gsheet_headers]
                         registros_data = registros_to_append.fillna('').values.tolist()
                         
                         registros_recibos_ws.append_rows(registros_data, value_input_option='USER_ENTERED')
                         
+                        # Actualizar consecutivos solo si es un nuevo registro
                         if st.session_state.mode == 'new':
                             update_series_consecutive(consecutivos_ws, serie_seleccionada, series_consecutive)
                             update_global_consecutive(global_consecutivo_ws, global_consecutive)
@@ -900,11 +933,13 @@ else:
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
                             )
 
+                        # Limpiar el estado de la sesión para el próximo uso
                         keys_to_clear = [k for k in st.session_state.keys() if k not in ['mode', 'google_credentials']]
                         for key in keys_to_clear:
                             del st.session_state[key]
                         
                         st.info("El proceso ha finalizado. La página se recargará para iniciar un nuevo ciclo.")
+                        time.sleep(5) # Dar tiempo al usuario para ver el mensaje
                         st.rerun()
 
                     except Exception as e:
