@@ -65,34 +65,40 @@ def connect_to_gsheet():
 
 def get_app_config(config_ws):
     """
-    Carga la configuración de bancos y terceros desde la hoja de trabajo 'Configuracion'.
+    Carga la configuración de bancos, terceros y destinos de tarjeta desde la hoja 'Configuracion'.
     """
     if config_ws is None:
-        return [], [], {}
+        return [], [], {}, []
     try:
         config_data = config_ws.get_all_records()
         bancos = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'BANCO' and d.get('Detalle'))))
         terceros = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TERCERO' and d.get('Detalle'))))
         
+        # <<<--- MODIFICACIÓN: Se añade la carga de destinos de tarjeta.
+        # Asegúrate de que en tu Google Sheet, los destinos como 'Datafono' tengan 'TARJETA' en la columna 'Tipo Movimiento'.
+        tarjetas = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TARJETA' and d.get('Detalle'))))
+
         account_mappings = {}
+        # <<<--- MODIFICACIÓN: Se incluye 'TARJETA' en el mapeo de cuentas.
         for d in config_data:
             detalle = str(d.get('Detalle', '')).strip()
-            if detalle and (d.get('Tipo Movimiento') in ['BANCO', 'TERCERO']):
+            if detalle and (d.get('Tipo Movimiento') in ['BANCO', 'TERCERO', 'TARJETA']):
                 account_mappings[detalle] = {
                     'cuenta': str(d.get('Cuenta Contable', '')).strip(),
                     'nit': str(d.get('NIT', '')).strip(),
                     'nombre': str(d.get('Nombre Tercero', '')).strip(),
                 }
-        return bancos, terceros, account_mappings
+        return bancos, terceros, account_mappings, tarjetas
     except Exception as e:
         st.error(f"Error al cargar la configuración de bancos y terceros: {e}")
-        return [], [], {}
+        return [], [], {}, []
 
 # --- LÓGICA DE PROCESAMIENTO Y GENERACIÓN DE ARCHIVOS ---
-def generate_txt_content(df, account_mappings, series_consecutive, global_consecutive, series):
+def generate_txt_content(df, account_mappings, series_consecutive, global_consecutive, series, tarjetas_destinos):
     """
     Genera el contenido del archivo TXT para el ERP, con la nueva estructura,
     créditos de cierre por fecha y descripciones de grupos ajustadas.
+    <<<--- MODIFICACIÓN: Añade la lógica del prefijo 'T' para tarjetas.
     """
     txt_lines = []
     cuenta_recibo_caja = "11050501"
@@ -115,6 +121,11 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
             valor = float(row['Valor_Total'])
             destino = str(row['Destino'])
             
+            # <<<--- LÓGICA PARA AÑADIR PREFIJO 'T' ---
+            serie_final_txt = str(series_numeric)
+            if destino in tarjetas_destinos:
+                serie_final_txt = "T" + serie_final_txt
+
             if destino in account_mappings:
                 destino_info = account_mappings[destino]
                 cuenta_destino = destino_info['cuenta']
@@ -124,7 +135,8 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
                 linea_debito = "|".join([
                     fecha, str(global_consecutive), cuenta_destino, tipo_documento,
                     f"Recibo de Caja {num_recibo} - {row['Cliente']}",
-                    str(series_numeric), str(series_consecutive),
+                    serie_final_txt, # <--- Se usa la serie con el prefijo condicional
+                    str(series_consecutive),
                     str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea_debito)
@@ -144,24 +156,29 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
             fecha = pd.to_datetime(group_row['Fecha_Primera'], dayfirst=True).strftime('%d/%m/%Y')
             recibos = group_row['Recibos_Incluidos']
 
+            # <<<--- LÓGICA PARA AÑADIR PREFIJO 'T' ---
+            serie_final_txt = str(series_numeric)
+            if destino in tarjetas_destinos:
+                serie_final_txt = "T" + serie_final_txt
+
             if destino in account_mappings:
                 destino_info = account_mappings[destino]
                 cuenta_destino = destino_info['cuenta']
                 nit_tercero = destino_info['nit']
                 nombre_tercero = destino_info['nombre']
 
-                # <<<--- MODIFICACIÓN: Se elimina el nombre del cliente de la descripción del grupo.
                 descripcion_grupo = f"Consolidado Recibos {recibos}"
 
                 linea_debito = "|".join([
                     fecha, str(global_consecutive), cuenta_destino, tipo_documento,
                     descripcion_grupo,
-                    str(series_numeric), str(series_consecutive),
+                    serie_final_txt, # <--- Se usa la serie con el prefijo condicional
+                    str(series_consecutive),
                     str(valor_total), "0", "0", nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea_debito)
 
-    # --- 3. <<<--- NUEVA LÓGICA: GENERAR LÍNEAS DE CRÉDITO POR CADA FECHA ---
+    # --- 3. NUEVA LÓGICA: GENERAR LÍNEAS DE CRÉDITO POR CADA FECHA ---
     if not df.empty:
         # Agrupar todo el DataFrame por fecha para calcular los totales diarios
         df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True)
@@ -176,10 +193,12 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
             # Crear una descripción para el cierre contable de esa fecha específica
             comentario_credito = f"Cierre Contable Fecha {fecha_cierre}"
 
+            # <<<--- MODIFICACIÓN: Se usa la serie original (sin prefijo) para la contrapartida
             linea_credito_por_fecha = "|".join([
                 fecha_cierre, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
                 comentario_credito,
-                str(series_numeric), str(series_consecutive),
+                str(series_numeric), 
+                str(series_consecutive),
                 "0", str(total_dia), "0", "0", "0", "0"
             ])
             txt_lines.append(linea_credito_por_fecha)
@@ -457,8 +476,9 @@ config_ws, registros_recibos_ws, consecutivos_ws, global_consecutivo_ws = connec
 if config_ws is None or registros_recibos_ws is None or consecutivos_ws is None or global_consecutivo_ws is None:
     st.error("La aplicación no puede continuar debido a un error de conexión con Google Sheets.")
 else:
-    bancos, terceros, account_mappings = get_app_config(config_ws)
-    opciones_destino = ["-- Seleccionar --"] + bancos + terceros
+    # <<<--- MODIFICACIÓN: Se captura la nueva lista de destinos de tarjeta.
+    bancos, terceros, account_mappings, tarjetas_destinos = get_app_config(config_ws)
+    opciones_destino = ["-- Seleccionar --"] + bancos + terceros + tarjetas_destinos
     opciones_agrupacion = list(range(1, 11))
     series_disponibles = ["189U", "157U", "156U"]
     
@@ -561,7 +581,8 @@ else:
             else:
                 df_for_download['Serie-Número'] = "N/A" # Placeholder si los datos antiguos no tienen esta info
 
-            txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
+            # <<<--- MODIFICACIÓN: Se pasa la lista de destinos de tarjeta a la función.
+            txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl, tarjetas_destinos)
             excel_file_dl = generate_excel_report(df_for_download)
 
             st.success(f"Archivos para el grupo Global {global_consecutive_to_download} listos para descargar.")
@@ -925,8 +946,8 @@ else:
                         # Esta es la línea que causaba el error y ahora funcionará porque las columnas se conservaron.
                         final_detailed_df['Serie-Número'] = final_detailed_df['SERIE_FACTURA'].astype(str) + "-" + final_detailed_df['NUMERO_FACTURA'].astype(str)
 
-                        # Usar el DataFrame detallado y actualizado para todas las operaciones finales
-                        txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
+                        # <<<--- MODIFICACIÓN: Se pasa la lista de destinos de tarjeta a la función.
+                        txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada, tarjetas_destinos)
                         excel_file = generate_excel_report(final_detailed_df)
 
                         # Preparar datos para guardar en Google Sheets
