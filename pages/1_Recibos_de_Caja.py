@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.3 (Reporte Detallado)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.4 (Vista Resumida en App)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -91,6 +91,7 @@ def get_app_config(config_ws):
 def generate_txt_content(df, account_mappings, series_consecutive, global_consecutive, series):
     """
     Genera el contenido del archivo TXT para el ERP, con la nueva estructura y un crédito único.
+    Usa el DataFrame con el detalle de movimientos.
     """
     txt_lines = []
     cuenta_recibo_caja = "11050501"
@@ -98,26 +99,35 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
     series_numeric = ''.join(filter(str.isdigit, series))
 
     # --- 1. PROCESAR REGISTROS INDIVIDUALES (AGRUPACIÓN 1) ---
-    df_individual = df[df['Agrupación'] == 1]
-    for _, row in df_individual.iterrows():
-        fecha = pd.to_datetime(row['Fecha'], dayfirst=True).strftime('%d/%m/%Y')
-        num_recibo = str(int(row['Recibo N°']))
-        valor = float(row['Valor Efectivo'])
-        destino = str(row['Destino'])
-        
-        if destino in account_mappings:
-            destino_info = account_mappings[destino]
-            cuenta_destino = destino_info['cuenta']
-            nit_tercero = destino_info['nit']
-            nombre_tercero = destino_info['nombre']
+    # Para el TXT, se necesita agrupar por recibo para generar una sola línea por recibo individual
+    df_individual = df[df['Agrupación'] == 1].copy()
+    if not df_individual.empty:
+        individual_grouped = df_individual.groupby('Recibo N°').agg(
+            Valor_Total=('Valor Efectivo', 'sum'),
+            Fecha=('Fecha', 'first'),
+            Cliente=('Cliente', 'first'),
+            Destino=('Destino', 'first')
+        ).reset_index()
 
-            linea_debito = "|".join([
-                fecha, str(global_consecutive), cuenta_destino, tipo_documento,
-                f"Recibo de Caja {num_recibo} - {row['Cliente']}",
-                str(series_numeric), str(series_consecutive),
-                str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
-            ])
-            txt_lines.append(linea_debito)
+        for _, row in individual_grouped.iterrows():
+            fecha = pd.to_datetime(row['Fecha'], dayfirst=True).strftime('%d/%m/%Y')
+            num_recibo = str(int(row['Recibo N°']))
+            valor = float(row['Valor_Total'])
+            destino = str(row['Destino'])
+            
+            if destino in account_mappings:
+                destino_info = account_mappings[destino]
+                cuenta_destino = destino_info['cuenta']
+                nit_tercero = destino_info['nit']
+                nombre_tercero = destino_info['nombre']
+
+                linea_debito = "|".join([
+                    fecha, str(global_consecutive), cuenta_destino, tipo_documento,
+                    f"Recibo de Caja {num_recibo} - {row['Cliente']}",
+                    str(series_numeric), str(series_consecutive),
+                    str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
+                ])
+                txt_lines.append(linea_debito)
 
     # --- 2. PROCESAR REGISTROS AGRUPADOS (AGRUPACIÓN > 1) ---
     df_agrupado = df[df['Agrupación'] > 1]
@@ -170,7 +180,7 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 
     return "\n".join(txt_lines)
 
-# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL (MODIFICADA) ---
+# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado.
@@ -626,7 +636,20 @@ else:
                     group_data_df['Valor Efectivo'] = pd.to_numeric(group_data_df['Valor Efectivo'])
                     group_data_df['Agrupación'] = pd.to_numeric(group_data_df['Agrupación'])
                     
-                    st.session_state.df_procesado = group_data_df
+                    # Guardar el detalle completo y crear un resumen para la UI
+                    st.session_state.df_full_detail = group_data_df.copy()
+
+                    df_summary_edit = group_data_df.groupby('Recibo N°').agg(
+                        Fecha=('Fecha', 'first'),
+                        Cliente=('Cliente', 'first'),
+                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'),
+                        Agrupación=('Agrupación', 'first'),
+                        Destino=('Destino', 'first')
+                    ).reset_index()
+
+                    df_summary_edit.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
+                    st.session_state.df_for_display = df_summary_edit[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
+                    
                     st.session_state.editing_info = {
                         'global_consecutive': global_consecutive_to_load,
                         'series_consecutive': group_data_df['Consecutivo Serie'].iloc[0],
@@ -653,7 +676,7 @@ else:
             )
 
         if uploaded_file is not None:
-            if 'df_procesado' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
+            if 'df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
                 try:
                     df = pd.read_excel(uploaded_file, header=0)
                     required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
@@ -678,19 +701,29 @@ else:
                     df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
                     df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
                     
-                    # Renombrar columnas manteniendo todas las originales para el detalle
-                    df_procesado = df_cleaned.rename(columns={
+                    df_full_detail = df_cleaned.rename(columns={
                         'FECHA_RECIBO': 'Fecha', 'NUMRECIBO': 'Recibo N°',
                         'NOMBRECLIENTE': 'Cliente', 'IMPORTE_LIMPIO': 'Valor Efectivo'
                     })
                     
-                    if pd.api.types.is_datetime64_any_dtype(df_procesado['Fecha']):
-                        df_procesado['Fecha'] = pd.to_datetime(df_procesado['Fecha']).dt.strftime('%d/%m/%Y')
+                    if pd.api.types.is_datetime64_any_dtype(df_full_detail['Fecha']):
+                        df_full_detail['Fecha'] = pd.to_datetime(df_full_detail['Fecha']).dt.strftime('%d/%m/%Y')
                     
-                    df_procesado['Agrupación'] = 1
-                    df_procesado['Destino'] = "-- Seleccionar --"
+                    # Guardar el detalle completo en el estado de la sesión
+                    st.session_state.df_full_detail = df_full_detail.copy()
+
+                    # Crear un DataFrame resumido para mostrar en la UI
+                    df_summary = df_full_detail.groupby('Recibo N°').agg(
+                        Fecha=('Fecha', 'first'),
+                        Cliente=('Cliente', 'first'),
+                        Valor_Efectivo_Total=('Valor Efectivo', 'sum')
+                    ).reset_index()
+                    df_summary.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
                     
-                    st.session_state.df_procesado = df_procesado.copy()
+                    df_summary['Agrupación'] = 1
+                    df_summary['Destino'] = "-- Seleccionar --"
+                    
+                    st.session_state.df_for_display = df_summary[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
                     st.session_state.uploaded_file_name = uploaded_file.name
                     st.session_state.editing_info = {'serie': serie_seleccionada}
                     st.success("¡Archivo procesado! Ahora puedes asignar destinos y grupos en la tabla de abajo.")
@@ -699,11 +732,12 @@ else:
                     st.error(f"Ocurrió un error al leer o procesar el archivo de Excel: {e}")
 
     # --- TABLA DE EDICIÓN Y PROCESAMIENTO (COMÚN PARA AMBOS MODOS) ---
-    if 'df_procesado' in st.session_state and not st.session_state.df_procesado.empty:
+    if 'df_for_display' in st.session_state and not st.session_state.df_for_display.empty:
         st.divider()
         st.header("3. Asigna Agrupación y Destinos")
         
-        total_recibos = st.session_state.df_procesado['Valor Efectivo'].sum()
+        # El total se calcula del dataframe de detalle para asegurar precisión
+        total_recibos = st.session_state.df_full_detail['Valor Efectivo'].sum()
         st.metric(label="💰 Total Efectivo del Grupo", value=f"${total_recibos:,.2f}")
 
         with st.expander("Herramientas de asignación masiva"):
@@ -712,33 +746,26 @@ else:
                 destino_masivo = st.selectbox("Asignar destino a todos:", options=opciones_destino, key="sel_destino_masivo")
                 if st.button("Aplicar Destino", use_container_width=True):
                     if destino_masivo != "-- Seleccionar --":
-                        st.session_state.df_procesado['Destino'] = destino_masivo
+                        st.session_state.df_for_display['Destino'] = destino_masivo
                         st.rerun()
             with col2:
                 agrupacion_masiva = st.selectbox("Asignar grupo a todos:", options=opciones_agrupacion, key="sel_agrupacion_masiva")
                 if st.button("Aplicar Grupo", use_container_width=True):
-                    st.session_state.df_procesado['Agrupación'] = agrupacion_masiva
+                    st.session_state.df_for_display['Agrupación'] = agrupacion_masiva
                     st.rerun()
 
-        st.info("Puedes editar cada fila individualmente en la tabla a continuación. Las columnas con detalles adicionales del archivo original se conservarán para el reporte de Excel.")
+        st.info("Edita la agrupación y el destino para cada recibo. El detalle completo se usará para el reporte final.")
         
-        # Configuración del editor de datos para mostrar solo columnas relevantes
-        all_cols = st.session_state.df_procesado.columns.tolist()
-        column_config_dict = {
-            "Agrupación": st.column_config.SelectboxColumn("Agrupación", help="Grupo 1 es individual. Grupos >1 se sumarán.", options=opciones_agrupacion, required=True),
-            "Destino": st.column_config.SelectboxColumn("Destino del Efectivo", help="Selecciona el banco o tercero.", options=opciones_destino, required=True),
-            "Valor Efectivo": st.column_config.NumberColumn("Valor Efectivo", format="$ %.2f", disabled=True),
-            "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
-            "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
-            "Recibo N°": st.column_config.NumberColumn("Recibo N°", disabled=True),
-        }
-        for col in all_cols:
-            if col not in column_config_dict:
-                column_config_dict[col] = None # Ocultar las columnas de detalle extra en la UI
-
-        edited_df = st.data_editor(
-            st.session_state.df_procesado,
-            column_config=column_config_dict,
+        edited_summary_df = st.data_editor(
+            st.session_state.df_for_display,
+            column_config={
+                "Agrupación": st.column_config.SelectboxColumn("Agrupación", help="Grupo 1 es individual. Grupos >1 se sumarán.", options=opciones_agrupacion, required=True),
+                "Destino": st.column_config.SelectboxColumn("Destino del Efectivo", help="Selecciona el banco o tercero.", options=opciones_destino, required=True),
+                "Valor Efectivo": st.column_config.NumberColumn("Valor Total Recibo", format="$ %.2f", disabled=True),
+                "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
+                "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
+                "Recibo N°": st.column_config.NumberColumn("Recibo N°", disabled=True),
+            },
             hide_index=True, use_container_width=True, key="editor_recibos",
             column_order=['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
         )
@@ -747,7 +774,7 @@ else:
         st.header("4. Finalizar Proceso")
         
         if st.button("💾 Procesar y Guardar Cambios", type="primary", use_container_width=True):
-            if edited_df['Destino'].isnull().any() or any(d == "-- Seleccionar --" for d in edited_df['Destino']):
+            if edited_summary_df['Destino'].isnull().any() or any(d == "-- Seleccionar --" for d in edited_summary_df['Destino']):
                 st.warning("⚠️ Debes asignar un destino válido para TODOS los recibos antes de procesar.")
             else:
                 try:
@@ -769,26 +796,40 @@ else:
                         
                         delete_existing_records(registros_recibos_ws, global_consecutive)
 
-                    txt_content = generate_txt_content(edited_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
-                    excel_file = generate_excel_report(edited_df)
+                    # --- Combinar decisiones de la UI con los datos de detalle ---
+                    df_full_detail = st.session_state.df_full_detail.copy()
+                    
+                    # Eliminar columnas viejas de 'Agrupación' y 'Destino' si existen
+                    if 'Agrupación' in df_full_detail.columns:
+                        df_full_detail = df_full_detail.drop(columns=['Agrupación'])
+                    if 'Destino' in df_full_detail.columns:
+                        df_full_detail = df_full_detail.drop(columns=['Destino'])
+                    
+                    # Unir las nuevas selecciones desde la tabla resumida al detalle completo
+                    final_detailed_df = pd.merge(
+                        df_full_detail,
+                        edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
+                        on='Recibo N°',
+                        how='left'
+                    )
 
-                    # Preparar datos para guardar, incluyendo columnas de detalle
-                    registros_data_df = edited_df.copy()
+                    # Usar el DataFrame detallado y actualizado para todas las operaciones finales
+                    txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
+                    excel_file = generate_excel_report(final_detailed_df)
+
+                    registros_data_df = final_detailed_df.copy()
                     registros_data_df['Serie'] = serie_seleccionada
                     registros_data_df['Consecutivo Serie'] = series_consecutive
                     registros_data_df['Consecutivo Global'] = global_consecutive
                     registros_data_df['Timestamp'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-                    # Convertir el DataFrame a una lista de listas para la API, asegurando el orden de las cabeceras en GSheets
-                    # Es MÁS SEGURO obtener las cabeceras actuales de GSheets para asegurar el orden
                     gsheet_headers = registros_recibos_ws.row_values(1)
-                    # Reordenar y rellenar df para que coincida exactamente
                     registros_final_df = pd.DataFrame(columns=gsheet_headers)
                     for col in registros_final_df.columns:
                         if col in registros_data_df.columns:
                             registros_final_df[col] = registros_data_df[col]
                         else:
-                            registros_final_df[col] = None # O un valor por defecto
+                            registros_final_df[col] = None
                     
                     registros_data = registros_final_df.fillna('').values.tolist()
                     
@@ -826,3 +867,4 @@ else:
 
                 except Exception as e:
                     st.error(f"Error al guardar los datos o generar los archivos: {e}")
+
