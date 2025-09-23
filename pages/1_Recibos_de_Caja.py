@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # --- IMPORTACIÓN DE LIBRERÍAS NECESARIAS ---
 import streamlit as st
 import pandas as pd
@@ -683,13 +681,16 @@ else:
             if 'df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
                 with st.spinner("Procesando archivo de Excel..."):
                     try:
-                        # 1. Cargar el archivo Excel. La cabecera está en la primera fila.
+                        # 1. Cargar el archivo Excel.
                         df = pd.read_excel(uploaded_file, header=0)
 
-                        # 2. Estandarizar nombres de columnas para mayor flexibilidad.
+                        # 2. <<<--- MODIFICACIÓN CLAVE: Eliminar la última fila (total) antes de cualquier procesamiento.
+                        df = df.iloc[:-1]
+
+                        # 3. Estandarizar nombres de columnas para mayor flexibilidad.
                         df.columns = df.columns.str.strip().str.upper()
                         
-                        # 3. Mapear posibles nombres de columnas a un estándar interno.
+                        # 4. Mapear posibles nombres de columnas a un estándar interno.
                         column_mapping = {
                             'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
@@ -706,21 +707,21 @@ else:
                         
                         df.rename(columns=found_columns, inplace=True)
 
-                        # 4. Verificar que las columnas clave existan después del mapeo.
+                        # 5. Verificar que las columnas clave existan después del mapeo.
                         required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
                             st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas: {', '.join(missing_columns)}")
                             st.stop()
                         
-                        # 5. Eliminar filas que no tengan un importe válido para limpiar el dataset.
+                        # 6. Eliminar filas que no tengan un importe válido para limpiar el dataset.
                         df_cleaned = df.dropna(subset=['IMPORTE']).copy()
 
-                        # 6. Rellenar datos en caso de que el reporte use celdas combinadas.
+                        # 7. Rellenar datos en caso de que el reporte use celdas combinadas.
                         for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
                             df_cleaned[col] = df_cleaned[col].ffill()
 
-                        # 7. Limpiar y convertir la columna de importe a formato numérico.
+                        # 8. Limpiar y convertir la columna de importe a formato numérico.
                         def clean_and_convert(value):
                             if isinstance(value, (int, float)): return float(value)
                             try:
@@ -735,7 +736,7 @@ else:
                             st.warning("Advertencia: No se encontraron datos válidos en el archivo.")
                             st.stop()
 
-                        # 8. Renombrar columnas para uso interno y formatear fecha.
+                        # 9. Renombrar columnas para uso interno y formatear fecha.
                         df_full_detail = df_cleaned.rename(columns={
                             'FECHA_RECIBO': 'Fecha', 'NUMRECIBO': 'Recibo N°',
                             'NOMBRECLIENTE': 'Cliente', 'IMPORTE_LIMPIO': 'Valor Efectivo'
@@ -746,7 +747,7 @@ else:
                         
                         st.session_state.df_full_detail = df_full_detail.copy()
 
-                        # 9. Agrupar por recibo para la vista de edición en la UI.
+                        # 10. Agrupar por recibo para la vista de edición en la UI.
                         df_summary = df_full_detail.groupby('Recibo N°').agg(
                             Fecha=('Fecha', 'first'),
                             Cliente=('Cliente', 'first'),
@@ -908,4 +909,3 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
-
