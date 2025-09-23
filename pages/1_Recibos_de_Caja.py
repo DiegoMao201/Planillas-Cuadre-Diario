@@ -91,16 +91,15 @@ def get_app_config(config_ws):
 # --- LÓGICA DE PROCESAMIENTO Y GENERACIÓN DE ARCHIVOS ---
 def generate_txt_content(df, account_mappings, series_consecutive, global_consecutive, series):
     """
-    Genera el contenido del archivo TXT para el ERP, con la nueva estructura y un crédito único.
-    Usa el DataFrame con el detalle de movimientos.
+    Genera el contenido del archivo TXT para el ERP, con la nueva estructura,
+    créditos de cierre por fecha y descripciones de grupos ajustadas.
     """
     txt_lines = []
     cuenta_recibo_caja = "11050501"
     tipo_documento = "12"
     series_numeric = ''.join(filter(str.isdigit, series))
 
-    # --- 1. PROCESAR REGISTROS INDIVIDUALES (AGRUPACIÓN 1) ---
-    # Para el TXT, se necesita agrupar por recibo para generar una sola línea por recibo individual
+    # --- 1. PROCESAR REGISTROS INDIVIDUALES (DÉBITOS) ---
     df_individual = df[df['Agrupación'] == 1].copy()
     if not df_individual.empty:
         individual_grouped = df_individual.groupby('Recibo N°').agg(
@@ -130,15 +129,13 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
                 ])
                 txt_lines.append(linea_debito)
 
-    # --- 2. PROCESAR REGISTROS AGRUPADOS (AGRUPACIÓN > 1) ---
+    # --- 2. PROCESAR REGISTROS AGRUPADOS (DÉBITOS) ---
     df_agrupado = df[df['Agrupación'] > 1]
     if not df_agrupado.empty:
-        # Aquí se agrupan los movimientos para generar una sola línea por consignación en el TXT
         grouped = df_agrupado.groupby(['Agrupación', 'Destino']).agg(
             Valor_Total=('Valor Efectivo', 'sum'),
             Fecha_Primera=('Fecha', 'first'),
-            Recibos_Incluidos=('Recibo N°', lambda x: ','.join(sorted(list(set(x.astype(str).str.split('.').str[0]))))),
-            Clientes_Grupo=('Cliente', lambda x: ', '.join(x.unique()))
+            Recibos_Incluidos=('Recibo N°', lambda x: ','.join(sorted(list(set(x.astype(str).str.split('.').str[0])))))
         ).reset_index()
 
         for _, group_row in grouped.iterrows():
@@ -146,7 +143,6 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
             valor_total = group_row['Valor_Total']
             fecha = pd.to_datetime(group_row['Fecha_Primera'], dayfirst=True).strftime('%d/%m/%Y')
             recibos = group_row['Recibos_Incluidos']
-            clientes_grupo = group_row['Clientes_Grupo']
 
             if destino in account_mappings:
                 destino_info = account_mappings[destino]
@@ -154,30 +150,39 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
                 nit_tercero = destino_info['nit']
                 nombre_tercero = destino_info['nombre']
 
+                # <<<--- MODIFICACIÓN: Se elimina el nombre del cliente de la descripción del grupo.
+                descripcion_grupo = f"Consolidado Recibos {recibos}"
+
                 linea_debito = "|".join([
                     fecha, str(global_consecutive), cuenta_destino, tipo_documento,
-                    f"Consolidado Recibos {recibos} - {clientes_grupo}",
+                    descripcion_grupo,
                     str(series_numeric), str(series_consecutive),
                     str(valor_total), "0", "0", nit_tercero, nombre_tercero, "0"
                 ])
                 txt_lines.append(linea_debito)
 
-    # --- 3. GENERAR LÍNEA DE CRÉDITO ÚNICA Y CONSOLIDADA ---
-    if not df.empty and txt_lines:
-        total_valor = df['Valor Efectivo'].sum()
-        primera_fecha = pd.to_datetime(df['Fecha'].iloc[0], dayfirst=True).strftime('%d/%m/%Y')
-        
-        min_recibo = int(df['Recibo N°'].min())
-        max_recibo = int(df['Recibo N°'].max())
-        comentario_credito = f"Consolidado Recibos del {min_recibo} al {max_recibo}"
+    # --- 3. <<<--- NUEVA LÓGICA: GENERAR LÍNEAS DE CRÉDITO POR CADA FECHA ---
+    if not df.empty:
+        # Agrupar todo el DataFrame por fecha para calcular los totales diarios
+        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True)
+        cierre_por_fecha = df.groupby('Fecha_dt').agg(
+            Valor_Total_Dia=('Valor Efectivo', 'sum')
+        ).reset_index()
 
-        linea_credito_unica = "|".join([
-            primera_fecha, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
-            comentario_credito,
-            str(series_numeric), str(series_consecutive),
-            "0", str(total_valor), "0", "0", "0", "0"
-        ])
-        txt_lines.append(linea_credito_unica)
+        for _, row_fecha in cierre_por_fecha.iterrows():
+            fecha_cierre = row_fecha['Fecha_dt'].strftime('%d/%m/%Y')
+            total_dia = row_fecha['Valor_Total_Dia']
+            
+            # Crear una descripción para el cierre contable de esa fecha específica
+            comentario_credito = f"Cierre Contable Fecha {fecha_cierre}"
+
+            linea_credito_por_fecha = "|".join([
+                fecha_cierre, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
+                comentario_credito,
+                str(series_numeric), str(series_consecutive),
+                "0", str(total_dia), "0", "0", "0", "0"
+            ])
+            txt_lines.append(linea_credito_por_fecha)
 
     return "\n".join(txt_lines)
 
