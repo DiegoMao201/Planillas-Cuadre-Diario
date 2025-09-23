@@ -686,7 +686,18 @@ else:
                     group_data_df['Valor Efectivo'] = pd.to_numeric(group_data_df['Valor Efectivo'])
                     group_data_df['Agrupación'] = pd.to_numeric(group_data_df['Agrupación'])
                     
-                    # Guardar el detalle completo y crear un resumen para la UI
+                    # <<<--- CORRECCIÓN CLAVE ---
+                    # Al cargar para editar, el DataFrame de detalle completo (st.session_state.df_full_detail)
+                    # DEBE contener las columnas originales de Serie y Número de factura.
+                    # Se renombran aquí para coincidir con el flujo de "nuevo archivo".
+                    # Esto asegura que cuando se guarden los cambios, las columnas necesarias existan.
+                    
+                    # Renombrar columnas para uso interno, incluyendo las de la factura
+                    if 'Serie_Factura' in group_data_df.columns:
+                        group_data_df.rename(columns={'Serie_Factura': 'SERIE_FACTURA'}, inplace=True)
+                    if 'Numero_Factura' in group_data_df.columns:
+                        group_data_df.rename(columns={'Numero_Factura': 'NUMERO_FACTURA'}, inplace=True)
+                    
                     st.session_state.df_full_detail = group_data_df.copy()
 
                     df_summary_edit = group_data_df.groupby('Recibo N°').agg(
@@ -911,6 +922,7 @@ else:
 
                         # <<<--- CORRECCIÓN: Crear la columna unificada 'Serie-Número' para los reportes
                         # Se asegura de que ambas columnas sean string antes de unirlas.
+                        # Esta es la línea que causaba el error y ahora funcionará porque las columnas se conservaron.
                         final_detailed_df['Serie-Número'] = final_detailed_df['SERIE_FACTURA'].astype(str) + "-" + final_detailed_df['NUMERO_FACTURA'].astype(str)
 
                         # Usar el DataFrame detallado y actualizado para todas las operaciones finales
