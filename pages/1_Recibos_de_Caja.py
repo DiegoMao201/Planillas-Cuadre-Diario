@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.1 (Corrección de Mapeo de Columnas)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.2 (Corrección de Sintaxis y Columnas)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -966,5 +966,3 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
-" and am asking the following query: "me muestra este error al cargar el archivo de excel  Missing column NUMERO in the DataFrame"
-
