@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.4 (Vista Resumida en App)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.5 (Corrección de Totales)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -678,7 +678,9 @@ else:
         if uploaded_file is not None:
             if 'df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
                 try:
-                    df = pd.read_excel(uploaded_file, header=0)
+                    # --- CORRECCIÓN CLAVE: IGNORAR LAS ÚLTIMAS 2 FILAS (TOTALES) ---
+                    df = pd.read_excel(uploaded_file, header=0, skipfooter=2)
+                    
                     required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
                     missing_columns = [col for col in required_columns if col not in df.columns]
                     if missing_columns:
@@ -727,6 +729,7 @@ else:
                     st.session_state.uploaded_file_name = uploaded_file.name
                     st.session_state.editing_info = {'serie': serie_seleccionada}
                     st.success("¡Archivo procesado! Ahora puedes asignar destinos y grupos en la tabla de abajo.")
+                    st.rerun() # Volver a correr para mostrar la tabla con los datos cargados
 
                 except Exception as e:
                     st.error(f"Ocurrió un error al leer o procesar el archivo de Excel: {e}")
