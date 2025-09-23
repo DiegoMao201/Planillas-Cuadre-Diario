@@ -19,7 +19,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v4.6 (Corrección Definitiva de Totales)")
+st.title("🧾 Procesamiento de Recibos de Caja v4.7 (Lectura Inteligente de Excel)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -594,23 +594,23 @@ else:
                                     st.error(f"Error crítico: La columna esperada '{col}' no se encontró en la hoja 'RegistrosRecibos'. Por favor, verifica la cabecera en Google Sheets.")
                                     st.stop()
 
-                    if not all_records_df.empty:
-                        filtered_df = all_records_df[
-                            (all_records_df['Fecha'] == search_date_str) & 
-                            (all_records_df['Serie'] == search_serie)
-                        ]
-                        
-                        if not filtered_df.empty:
-                            st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
-                                Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x).min()}-{pd.to_numeric(x).max()}"),
-                                Total=('Valor Efectivo', lambda x: pd.to_numeric(x).sum())
-                            ).reset_index()
-                            st.session_state.full_search_results = all_records_df
+                        if not all_records_df.empty:
+                            filtered_df = all_records_df[
+                                (all_records_df['Fecha'] == search_date_str) & 
+                                (all_records_df['Serie'] == search_serie)
+                            ]
+                            
+                            if not filtered_df.empty:
+                                st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
+                                    Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x).min()}-{pd.to_numeric(x).max()}"),
+                                    Total=('Valor Efectivo', lambda x: pd.to_numeric(x).sum())
+                                ).reset_index()
+                                st.session_state.full_search_results = all_records_df
+                            else:
+                                st.session_state.found_groups = pd.DataFrame()
+                                st.warning("No se encontraron grupos para esa fecha y serie.")
                         else:
-                            st.session_state.found_groups = pd.DataFrame()
-                            st.warning("No se encontraron grupos para esa fecha y serie.")
-                    else:
-                        st.warning("No hay registros en la hoja 'RegistrosRecibos' para buscar.")
+                            st.warning("No hay registros en la hoja 'RegistrosRecibos' para buscar.")
                 except Exception as e:
                     st.error(f"Error al buscar registros: {e}")
 
@@ -686,26 +686,28 @@ else:
                         st.info("Paso 1: Leyendo el archivo Excel...")
                         df = pd.read_excel(uploaded_file, header=0)
 
-                        # --- CORRECCIÓN INTELIGENTE DE TOTALES ---
-                        # 2. Eliminar filas de subtotales ANTES de cualquier procesamiento.
-                        st.info("Paso 2: Eliminando filas de subtotales y asegurando que las columnas clave existan.")
+                        # --- CORRECCIÓN INTELIGENTE DE TOTALES Y COLUMNAS ---
+                        st.info("Paso 2: Estandarizando nombres de columnas (mayúsculas, sin espacios)...")
+                        df.columns = df.columns.str.strip().str.upper()
+
+                        st.info("Paso 3: Verificando que las columnas clave existan.")
                         required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
-                            st.error(f"Error: Faltan las siguientes columnas en el Excel: {', '.join(missing_columns)}")
+                            st.error(f"Error: Faltan las siguientes columnas requeridas en el Excel: {', '.join(missing_columns)}")
+                            st.error(f"Columnas encontradas (estandarizadas): {list(df.columns)}")
                             st.stop()
                         
+                        st.info("Paso 4: Eliminando filas de subtotales y datos no válidos.")
                         df_cleaned = df.dropna(subset=['NOMBRECLIENTE', 'FECHA_RECIBO']).copy()
                         if df_cleaned.empty:
                             st.warning("Advertencia: Después de eliminar filas sin cliente o fecha, no quedaron datos. Revisa el Excel.")
                             st.stop()
 
-                        # 3. Ahora, con los datos limpios, podemos hacer ffill de forma segura.
-                        st.info("Paso 3: Rellenando información faltante (número de recibo, fecha, cliente).")
+                        st.info("Paso 5: Rellenando información faltante (número de recibo, fecha, cliente).")
                         for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
                             df_cleaned[col] = df_cleaned[col].ffill()
                         
-                        # Función para limpiar y convertir valores monetarios
                         def clean_and_convert(value):
                             if isinstance(value, (int, float)): return float(value)
                             try:
@@ -713,7 +715,7 @@ else:
                                 return float(str_value)
                             except (ValueError, TypeError): return None
                         
-                        st.info("Paso 4: Limpiando y convirtiendo los valores de 'IMPORTE' a formato numérico.")
+                        st.info("Paso 6: Limpiando y convirtiendo los valores de 'IMPORTE' a formato numérico.")
                         df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(clean_and_convert)
                         df_cleaned.dropna(subset=['IMPORTE_LIMPIO'], inplace=True)
 
@@ -733,7 +735,7 @@ else:
                         st.session_state.df_full_detail = df_full_detail.copy()
 
                         # Crear un DataFrame resumido para mostrar en la UI
-                        st.info("Paso 5: Agrupando los datos por número de recibo para la tabla de edición.")
+                        st.info("Paso 7: Agrupando los datos por número de recibo para la tabla de edición.")
                         df_summary = df_full_detail.groupby('Recibo N°').agg(
                             Fecha=('Fecha', 'first'),
                             Cliente=('Cliente', 'first'),
@@ -752,7 +754,6 @@ else:
 
                     except Exception as e:
                         st.error(f"Ocurrió un error al leer o procesar el archivo de Excel: {e}")
-                        # Limpiar el estado para permitir un nuevo intento
                         if 'df_for_display' in st.session_state:
                             del st.session_state.df_for_display
                         if 'uploaded_file_name' in st.session_state:
@@ -828,13 +829,11 @@ else:
                         # --- Combinar decisiones de la UI con los datos de detalle ---
                         df_full_detail = st.session_state.df_full_detail.copy()
                         
-                        # Eliminar columnas viejas de 'Agrupación' y 'Destino' si existen
                         if 'Agrupación' in df_full_detail.columns:
                             df_full_detail = df_full_detail.drop(columns=['Agrupación'])
                         if 'Destino' in df_full_detail.columns:
                             df_full_detail = df_full_detail.drop(columns=['Destino'])
                         
-                        # Unir las nuevas selecciones desde la tabla resumida al detalle completo
                         final_detailed_df = pd.merge(
                             df_full_detail,
                             edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
@@ -853,14 +852,16 @@ else:
                         registros_data_df['Timestamp'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
                         gsheet_headers = registros_recibos_ws.row_values(1)
-                        registros_final_df = pd.DataFrame(columns=gsheet_headers)
-                        for col in registros_final_df.columns:
+                        registros_to_append = pd.DataFrame(columns=gsheet_headers)
+
+                        for col in gsheet_headers:
                             if col in registros_data_df.columns:
-                                registros_final_df[col] = registros_data_df[col]
+                                registros_to_append[col] = registros_data_df[col]
                             else:
-                                registros_final_df[col] = None
+                                registros_to_append[col] = ''
                         
-                        registros_data = registros_final_df.fillna('').values.tolist()
+                        registros_to_append = registros_to_append[gsheet_headers]
+                        registros_data = registros_to_append.fillna('').values.tolist()
                         
                         registros_recibos_ws.append_rows(registros_data, value_input_option='USER_ENTERED')
                         
@@ -887,7 +888,6 @@ else:
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
                             )
 
-                        # Limpiar estado para el siguiente ciclo
                         keys_to_clear = [k for k in st.session_state.keys() if k not in ['mode', 'google_credentials']]
                         for key in keys_to_clear:
                             del st.session_state[key]
@@ -897,3 +897,4 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
+
