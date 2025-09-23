@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.0 (Manejo de Serie y Número de Factura)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.1 (Corrección de Mapeo de Columnas)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
@@ -181,7 +181,7 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 
     return "\n".join(txt_lines)
 
-# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL (MODIFICADA) ---
+# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado.
@@ -730,14 +730,18 @@ else:
                         df = df.iloc[:-1]
 
                         # 3. Estandarizar nombres de columnas para mayor flexibilidad.
-                        df.columns = df.columns.str.strip().str.upper()
+                        # Se eliminan acentos, espacios y se convierte a mayúsculas.
+                        df.columns = df.columns.str.strip().str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                         
                         # 4. Mapear posibles nombres de columnas a un estándar interno.
+                        #    Se separa NUMRECIBO de NUMERO para evitar conflictos.
                         column_mapping = {
-                            'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO', 'NÚMERO'],
+                            'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
                             'FECHA_RECIBO': ['FECHA_RECIBO', 'FECHA RECIBO', 'FECHA'],
-                            'IMPORTE': ['IMPORTE', 'VALOR', 'TOTAL']
+                            'IMPORTE': ['IMPORTE', 'VALOR', 'TOTAL'],
+                            'NUMERO': ['NUMERO'], # Para la columna 'Número' de la factura
+                            'SERIE': ['SERIE']   # Para la columna 'Serie' de la factura
                         }
                         
                         found_columns = {}
@@ -750,7 +754,7 @@ else:
                         df.rename(columns=found_columns, inplace=True)
 
                         # 5. Verificar que las columnas clave existan después del mapeo.
-                        required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE']
+                        required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE', 'NUMERO', 'SERIE']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
                             st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas: {', '.join(missing_columns)}")
@@ -962,4 +966,5 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
+" and am asking the following query: "me muestra este error al cargar el archivo de excel  Missing column NUMERO in the DataFrame"
 
