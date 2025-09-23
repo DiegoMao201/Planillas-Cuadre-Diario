@@ -187,6 +187,7 @@ def generate_excel_report(df):
     - Ordena por Agrupación y luego por Recibo N°.
     - Añade subtotales para cada recibo individual (Agrupación = 1).
     - Añade subtotales para cada grupo de consignación (Agrupación > 1).
+    - Incluye la nueva columna 'Serie-Número'.
     """
     output = BytesIO()
     
@@ -195,8 +196,8 @@ def generate_excel_report(df):
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
     df.dropna(subset=['Recibo N°', 'Agrupación'], inplace=True)
     
-    # Reordenar las columnas para una presentación lógica en Excel
-    preferred_order = ['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
+    # Reordenar las columnas para una presentación lógica en Excel, incluyendo la nueva columna
+    preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
     # Incluir cualquier otra columna que pueda venir del excel original
     excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order]
     df = df[excel_columns]
@@ -218,11 +219,13 @@ def generate_excel_report(df):
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
-            # Agregar la fila de subtotal para este recibo
+            # Agregar la fila de subtotal para este recibo (lógica dinámica)
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
-            subtotal_row[2] = f'Subtotal Recibo N° {int(recibo_num)}'
-            subtotal_row[3] = subtotal
+            cliente_col_idx = excel_columns.index('Cliente')
+            valor_col_idx = excel_columns.index('Valor Efectivo')
+            subtotal_row[cliente_col_idx] = f'Subtotal Recibo N° {int(recibo_num)}'
+            subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
 
     # 3. Procesar consignaciones agrupadas con subtotal por grupo
@@ -232,11 +235,13 @@ def generate_excel_report(df):
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
-            # Agregar la fila de subtotal para este grupo
+            # Agregar la fila de subtotal para este grupo (lógica dinámica)
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
-            subtotal_row[2] = f'Subtotal Consignación Grupo {int(agrupacion_id)}'
-            subtotal_row[3] = subtotal
+            cliente_col_idx = excel_columns.index('Cliente')
+            valor_col_idx = excel_columns.index('Valor Efectivo')
+            subtotal_row[cliente_col_idx] = f'Subtotal Consignación Grupo {int(agrupacion_id)}'
+            subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
     
     # Crear el DataFrame final para el reporte
@@ -268,8 +273,9 @@ def generate_excel_report(df):
 
         # Aplicar estilo a las filas de datos y subtotales
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
-            # Identificar si es una fila de subtotal por el texto en la tercera columna (Cliente)
-            is_subtotal_row = str(row[2].value).startswith('Subtotal')
+            # Identificar si es una fila de subtotal por el texto en la columna Cliente
+            cliente_col_idx_check = excel_columns.index('Cliente')
+            is_subtotal_row = str(row[cliente_col_idx_check].value).startswith('Subtotal')
             
             for cell in row:
                 cell.border = thin_border
@@ -285,7 +291,7 @@ def generate_excel_report(df):
                 valor_cell.number_format = currency_format
 
             # Alinear columnas específicas
-            for col_name, align in [('Recibo N°', 'center'), ('Valor Efectivo', 'right'), ('Agrupación', 'center')]:
+            for col_name, align in [('Recibo N°', 'center'), ('Valor Efectivo', 'right'), ('Agrupación', 'center'), ('Serie-Número', 'center')]:
                 if col_name in excel_columns:
                     col_idx = excel_columns.index(col_name) + 1
                     col_letter = get_column_letter(col_idx)
@@ -540,6 +546,9 @@ else:
             series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
             serie_dl = df_for_download['Serie'].iloc[0]
 
+            # Crear la columna unificada para el Excel de descarga
+            df_for_download['Serie-Número'] = serie_dl + "-" + df_for_download['Recibo N°'].astype(int).astype(str)
+
             txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl)
             excel_file_dl = generate_excel_report(df_for_download)
 
@@ -720,7 +729,7 @@ else:
                         
                         # 4. Mapear posibles nombres de columnas a un estándar interno.
                         column_mapping = {
-                            'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
+                            'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO', 'NÚMERO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
                             'FECHA_RECIBO': ['FECHA_RECIBO', 'FECHA RECIBO', 'FECHA'],
                             'IMPORTE': ['IMPORTE', 'VALOR', 'TOTAL']
@@ -881,6 +890,9 @@ else:
                             on='Recibo N°',
                             how='left'
                         )
+
+                        # Crear la columna unificada 'Serie-Número' para los reportes
+                        final_detailed_df['Serie-Número'] = serie_seleccionada + "-" + final_detailed_df['Recibo N°'].astype(int).astype(str)
 
                         # Usar el DataFrame detallado y actualizado para todas las operaciones finales
                         txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada)
