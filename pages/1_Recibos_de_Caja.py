@@ -20,11 +20,11 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.3 (Corrección de Columnas Serie/Número)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.4 (Consolidación y Consecutivos Diarios)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
-1.  **Descargar reportes antiguos**: Busca cualquier grupo ya procesado por un rango de fechas y serie para descargar sus archivos.
-2.  **Cargar un nuevo archivo de Excel**: Procesa y guarda un nuevo grupo de recibos, generando un reporte detallado.
+1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
+2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
 3.  **Buscar y editar un grupo existente**: Carga un grupo para editarlo y volver a guardarlo.
 """)
 
@@ -74,12 +74,9 @@ def get_app_config(config_ws):
         bancos = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'BANCO' and d.get('Detalle'))))
         terceros = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TERCERO' and d.get('Detalle'))))
         
-        # <<<--- MODIFICACIÓN: Se añade la carga de destinos de tarjeta.
-        # Asegúrate de que en tu Google Sheet, los destinos como 'Datafono' tengan 'TARJETA' en la columna 'Tipo Movimiento'.
         tarjetas = sorted(list(set(str(d['Detalle']).strip() for d in config_data if d.get('Tipo Movimiento') == 'TARJETA' and d.get('Detalle'))))
 
         account_mappings = {}
-        # <<<--- MODIFICACIÓN: Se incluye 'TARJETA' en el mapeo de cuentas.
         for d in config_data:
             detalle = str(d.get('Detalle', '')).strip()
             if detalle and (d.get('Tipo Movimiento') in ['BANCO', 'TERCERO', 'TARJETA']):
@@ -94,106 +91,104 @@ def get_app_config(config_ws):
         return [], [], {}, []
 
 # --- LÓGICA DE PROCESAMIENTO Y GENERACIÓN DE ARCHIVOS ---
-def generate_txt_content(df, account_mappings, series_consecutive, global_consecutive, series, tarjetas_destinos):
+def generate_txt_content(df, account_mappings, tarjetas_destinos):
     """
-    Genera el contenido del archivo TXT para el ERP, con la nueva estructura,
-    créditos de cierre por fecha y descripciones de grupos ajustadas.
-    <<<--- MODIFICACIÓN: Añade la lógica del prefijo 'T' para tarjetas.
+    Genera el contenido del archivo TXT para el ERP.
+    MODIFICADO: Ahora procesa un DataFrame que puede contener múltiples días y múltiples
+    consecutivos. Agrupa por 'Consecutivo Global' para manejar cada lote diario
+    de forma independiente.
     """
     txt_lines = []
     cuenta_recibo_caja = "11050501"
     tipo_documento = "12"
-    series_numeric = ''.join(filter(str.isdigit, series))
 
-    # --- 1. PROCESAR REGISTROS INDIVIDUALES (DÉBITOS) ---
-    df_individual = df[df['Agrupación'] == 1].copy()
-    if not df_individual.empty:
-        individual_grouped = df_individual.groupby('Recibo N°').agg(
-            Valor_Total=('Valor Efectivo', 'sum'),
-            Fecha=('Fecha', 'first'),
-            Cliente=('Cliente', 'first'),
-            Destino=('Destino', 'first')
-        ).reset_index()
+    if df.empty:
+        return ""
 
-        for _, row in individual_grouped.iterrows():
-            fecha = pd.to_datetime(row['Fecha'], dayfirst=True).strftime('%d/%m/%Y')
-            num_recibo = str(int(row['Recibo N°']))
-            valor = float(row['Valor_Total'])
-            destino = str(row['Destino'])
-            
-            # <<<--- LÓGICA PARA AÑADIR PREFIJO 'T' ---
-            serie_final_txt = str(series_numeric)
-            if destino in tarjetas_destinos:
-                serie_final_txt = "T" + serie_final_txt
+    # Agrupa por el consecutivo global. Esto separa los lotes (que ahora son diarios).
+    for global_consecutive, group_df in df.groupby('Consecutivo Global'):
+        # Extrae los datos del lote. Se asume que son iguales para todo el lote.
+        series_consecutive = group_df['Consecutivo Serie'].iloc[0]
+        series = group_df['Serie'].iloc[0]
+        series_numeric = ''.join(filter(str.isdigit, str(series)))
 
-            if destino in account_mappings:
-                destino_info = account_mappings[destino]
-                cuenta_destino = destino_info['cuenta']
-                nit_tercero = destino_info['nit']
-                nombre_tercero = destino_info['nombre']
+        # --- 1. PROCESAR REGISTROS INDIVIDUALES (DÉBITOS) DEL LOTE ACTUAL ---
+        df_individual = group_df[group_df['Agrupación'] == 1].copy()
+        if not df_individual.empty:
+            individual_grouped = df_individual.groupby('Recibo N°').agg(
+                Valor_Total=('Valor Efectivo', 'sum'),
+                Fecha=('Fecha', 'first'),
+                Cliente=('Cliente', 'first'),
+                Destino=('Destino', 'first')
+            ).reset_index()
 
-                linea_debito = "|".join([
-                    fecha, str(global_consecutive), cuenta_destino, tipo_documento,
-                    f"Recibo de Caja {num_recibo} - {row['Cliente']}",
-                    serie_final_txt, # <--- Se usa la serie con el prefijo condicional
-                    str(series_consecutive),
-                    str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
-                ])
-                txt_lines.append(linea_debito)
+            for _, row in individual_grouped.iterrows():
+                fecha = pd.to_datetime(row['Fecha'], dayfirst=True).strftime('%d/%m/%Y')
+                num_recibo = str(int(row['Recibo N°']))
+                valor = float(row['Valor_Total'])
+                destino = str(row['Destino'])
+                
+                serie_final_txt = str(series_numeric)
+                if destino in tarjetas_destinos:
+                    serie_final_txt = "T" + serie_final_txt
 
-    # --- 2. PROCESAR REGISTROS AGRUPADOS (DÉBITOS) ---
-    df_agrupado = df[df['Agrupación'] > 1]
-    if not df_agrupado.empty:
-        grouped = df_agrupado.groupby(['Agrupación', 'Destino']).agg(
-            Valor_Total=('Valor Efectivo', 'sum'),
-            Fecha_Primera=('Fecha', 'first'),
-            Recibos_Incluidos=('Recibo N°', lambda x: ','.join(sorted(list(set(x.astype(str).str.split('.').str[0])))))
-        ).reset_index()
+                if destino in account_mappings:
+                    destino_info = account_mappings[destino]
+                    cuenta_destino = destino_info['cuenta']
+                    nit_tercero = destino_info['nit']
+                    nombre_tercero = destino_info['nombre']
 
-        for _, group_row in grouped.iterrows():
-            destino = group_row['Destino']
-            valor_total = group_row['Valor_Total']
-            fecha = pd.to_datetime(group_row['Fecha_Primera'], dayfirst=True).strftime('%d/%m/%Y')
-            recibos = group_row['Recibos_Incluidos']
+                    linea_debito = "|".join([
+                        fecha, str(global_consecutive), cuenta_destino, tipo_documento,
+                        f"Recibo de Caja {num_recibo} - {row['Cliente']}",
+                        serie_final_txt,
+                        str(series_consecutive),
+                        str(valor), "0", "0", nit_tercero, nombre_tercero, "0"
+                    ])
+                    txt_lines.append(linea_debito)
 
-            # <<<--- LÓGICA PARA AÑADIR PREFIJO 'T' ---
-            serie_final_txt = str(series_numeric)
-            if destino in tarjetas_destinos:
-                serie_final_txt = "T" + serie_final_txt
+        # --- 2. PROCESAR REGISTROS AGRUPADOS (DÉBITOS) DEL LOTE ACTUAL ---
+        df_agrupado = group_df[group_df['Agrupación'] > 1]
+        if not df_agrupado.empty:
+            grouped = df_agrupado.groupby(['Agrupación', 'Destino']).agg(
+                Valor_Total=('Valor Efectivo', 'sum'),
+                Fecha_Primera=('Fecha', 'first'),
+                Recibos_Incluidos=('Recibo N°', lambda x: ','.join(sorted(list(set(x.astype(str).str.split('.').str[0])))))
+            ).reset_index()
 
-            if destino in account_mappings:
-                destino_info = account_mappings[destino]
-                cuenta_destino = destino_info['cuenta']
-                nit_tercero = destino_info['nit']
-                nombre_tercero = destino_info['nombre']
+            for _, group_row in grouped.iterrows():
+                destino = group_row['Destino']
+                valor_total = group_row['Valor_Total']
+                fecha = pd.to_datetime(group_row['Fecha_Primera'], dayfirst=True).strftime('%d/%m/%Y')
+                recibos = group_row['Recibos_Incluidos']
 
-                descripcion_grupo = f"Consolidado Recibos {recibos}"
+                serie_final_txt = str(series_numeric)
+                if destino in tarjetas_destinos:
+                    serie_final_txt = "T" + serie_final_txt
 
-                linea_debito = "|".join([
-                    fecha, str(global_consecutive), cuenta_destino, tipo_documento,
-                    descripcion_grupo,
-                    serie_final_txt, # <--- Se usa la serie con el prefijo condicional
-                    str(series_consecutive),
-                    str(valor_total), "0", "0", nit_tercero, nombre_tercero, "0"
-                ])
-                txt_lines.append(linea_debito)
+                if destino in account_mappings:
+                    destino_info = account_mappings[destino]
+                    cuenta_destino = destino_info['cuenta']
+                    nit_tercero = destino_info['nit']
+                    nombre_tercero = destino_info['nombre']
+                    descripcion_grupo = f"Consolidado Recibos {recibos}"
 
-    # --- 3. NUEVA LÓGICA: GENERAR LÍNEAS DE CRÉDITO POR CADA FECHA ---
-    if not df.empty:
-        # Agrupar todo el DataFrame por fecha para calcular los totales diarios
-        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True)
-        cierre_por_fecha = df.groupby('Fecha_dt').agg(
-            Valor_Total_Dia=('Valor Efectivo', 'sum')
-        ).reset_index()
+                    linea_debito = "|".join([
+                        fecha, str(global_consecutive), cuenta_destino, tipo_documento,
+                        descripcion_grupo,
+                        serie_final_txt,
+                        str(series_consecutive),
+                        str(valor_total), "0", "0", nit_tercero, nombre_tercero, "0"
+                    ])
+                    txt_lines.append(linea_debito)
 
-        for _, row_fecha in cierre_por_fecha.iterrows():
-            fecha_cierre = row_fecha['Fecha_dt'].strftime('%d/%m/%Y')
-            total_dia = row_fecha['Valor_Total_Dia']
-            
-            # Crear una descripción para el cierre contable de esa fecha específica
+        # --- 3. GENERAR LÍNEA DE CRÉDITO PARA ESTE LOTE DIARIO ---
+        # El lote completo (group_df) corresponde a un único día.
+        if not group_df.empty:
+            total_dia = group_df['Valor Efectivo'].sum()
+            fecha_cierre = pd.to_datetime(group_df['Fecha'].iloc[0], dayfirst=True).strftime('%d/%m/%Y')
             comentario_credito = f"Cierre Contable Fecha {fecha_cierre}"
 
-            # <<<--- MODIFICACIÓN: Se usa la serie original (sin prefijo) para la contrapartida
             linea_credito_por_fecha = "|".join([
                 fecha_cierre, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
                 comentario_credito,
@@ -209,43 +204,40 @@ def generate_txt_content(df, account_mappings, series_consecutive, global_consec
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado.
-    - Muestra el detalle completo de cada movimiento.
-    - Ordena por Agrupación y luego por Recibo N°.
-    - Añade subtotales para cada recibo individual (Agrupación = 1).
-    - Añade subtotales para cada grupo de consignación (Agrupación > 1).
-    - Incluye la nueva columna 'Serie-Número'.
+    - MODIFICADO: Ahora ordena primero por Fecha para manejar reportes de múltiples días.
     """
     output = BytesIO()
     
     # Asegurar que las columnas numéricas sean del tipo correcto para ordenar
     df['Recibo N°'] = pd.to_numeric(df['Recibo N°'], errors='coerce')
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
+    df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True)
     df.dropna(subset=['Recibo N°', 'Agrupación'], inplace=True)
     
-    # Reordenar las columnas para una presentación lógica en Excel, incluyendo la nueva columna
+    # Reordenar las columnas para una presentación lógica en Excel
     preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
-    # Incluir cualquier otra columna que pueda venir del excel original
     excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order]
     df = df[excel_columns]
+    
+    # Ordenar por fecha primero, luego por los otros criterios
+    df.sort_values(by=['Fecha', 'Agrupación', 'Recibo N°'], inplace=True)
+    
+    # Formatear la fecha de nuevo a string para el display en excel
+    df['Fecha'] = df['Fecha'].dt.strftime('%d/%m/%Y')
 
     # 1. Separar data en individuales y grupos de consignación
     df_individual = df[df['Agrupación'] == 1].copy()
     df_grouped = df[df['Agrupación'] > 1].copy()
 
-    # Ordenar cada sub-dataframe
-    df_individual.sort_values(by=['Recibo N°'], inplace=True)
-    df_grouped.sort_values(by=['Agrupación', 'Recibo N°'], inplace=True)
-
     report_data = []
 
     # 2. Procesar recibos individuales con subtotal por número de recibo
     if not df_individual.empty:
+        # Agrupamos por recibo, pero el dataframe ya está ordenado por fecha
         for recibo_num, group in df_individual.groupby('Recibo N°', sort=False):
-            # Agregar todas las filas (movimientos) de este recibo
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
-            # Agregar la fila de subtotal para este recibo (lógica dinámica)
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
             cliente_col_idx = excel_columns.index('Cliente')
@@ -256,12 +248,11 @@ def generate_excel_report(df):
 
     # 3. Procesar consignaciones agrupadas con subtotal por grupo
     if not df_grouped.empty:
+        # Agrupamos por ID de agrupación, el dataframe ya está ordenado
         for agrupacion_id, group in df_grouped.groupby('Agrupación', sort=False):
-            # Agregar todas las filas de este grupo de consignación
             for _, row in group.iterrows():
                 report_data.append(row[excel_columns].tolist())
             
-            # Agregar la fila de subtotal para este grupo (lógica dinámica)
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
             cliente_col_idx = excel_columns.index('Cliente')
@@ -270,7 +261,6 @@ def generate_excel_report(df):
             subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
     
-    # Crear el DataFrame final para el reporte
     if not report_data:
         report_df = pd.DataFrame(columns=excel_columns)
     else:
@@ -299,7 +289,6 @@ def generate_excel_report(df):
 
         # Aplicar estilo a las filas de datos y subtotales
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
-            # Identificar si es una fila de subtotal por el texto en la columna Cliente
             cliente_col_idx_check = excel_columns.index('Cliente')
             is_subtotal_row = str(row[cliente_col_idx_check].value).startswith('Subtotal')
             
@@ -309,14 +298,12 @@ def generate_excel_report(df):
                     cell.font = subtotal_font
                     cell.fill = subtotal_fill
             
-            # Formatear la columna de Valor Efectivo como moneda
             valor_cell_index = excel_columns.index('Valor Efectivo') + 1
             valor_cell_letter = get_column_letter(valor_cell_index)
             valor_cell = worksheet[f'{valor_cell_letter}{row_idx}']
             if isinstance(valor_cell.value, (int, float)):
                 valor_cell.number_format = currency_format
 
-            # Alinear columnas específicas
             for col_name, align in [('Recibo N°', 'center'), ('Valor Efectivo', 'right'), ('Agrupación', 'center'), ('Serie-Número', 'center')]:
                 if col_name in excel_columns:
                     col_idx = excel_columns.index(col_name) + 1
@@ -327,7 +314,6 @@ def generate_excel_report(df):
         grand_total = df['Valor Efectivo'].sum()
         total_row_idx = worksheet.max_row + 1
         
-        # Colocar el total general en las columnas correctas
         cliente_col_idx = excel_columns.index('Cliente') + 1
         valor_col_idx = excel_columns.index('Valor Efectivo') + 1
         
@@ -350,7 +336,6 @@ def generate_excel_report(df):
             max_length = 0
             column_letter = get_column_letter(col_idx)
             
-            # Considerar el largo del encabezado
             if worksheet[f'{column_letter}1'].value:
                 max_length = len(str(worksheet[f'{column_letter}1'].value))
 
@@ -360,7 +345,6 @@ def generate_excel_report(df):
                         max_length = len(str(cell.value))
                 except:
                     pass
-            # Añadir un poco de espacio extra
             adjusted_width = (max_length + 2)
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
@@ -434,18 +418,16 @@ def delete_existing_records(ws, global_consecutive_to_delete):
 
         rows_to_delete_indices = df_records[df_records['Consecutivo Global'] == global_consecutive_to_delete].index.tolist()
         
-        # El índice de gspread es 1-based y la cabecera es la fila 1, por lo que los datos empiezan en la fila 2.
         gspread_rows_to_delete = sorted([i + 2 for i in rows_to_delete_indices])
 
         if not gspread_rows_to_delete:
             st.warning("No se encontraron registros antiguos que coincidieran. Se procederá a guardar como si fueran nuevos.")
             return
 
-        # Agrupar índices consecutivos para eliminar en rangos
         requests = []
         for k, g in groupby(enumerate(gspread_rows_to_delete), lambda i_x: i_x[0] - i_x[1]):
             group = list(map(itemgetter(1), g))
-            start_index = group[0] - 1 # El startIndex es 0-based
+            start_index = group[0] - 1
             end_index = group[-1]
             
             requests.append({
@@ -460,7 +442,6 @@ def delete_existing_records(ws, global_consecutive_to_delete):
             })
         
         if requests:
-            # Es más seguro eliminar desde el final hacia el principio para no alterar los índices de las siguientes operaciones.
             requests.reverse()
             ws.spreadsheet.batch_update({"requests": requests})
             st.success(f"Se eliminaron {len(gspread_rows_to_delete)} registros antiguos en una sola operación por lotes.")
@@ -476,7 +457,6 @@ config_ws, registros_recibos_ws, consecutivos_ws, global_consecutivo_ws = connec
 if config_ws is None or registros_recibos_ws is None or consecutivos_ws is None or global_consecutivo_ws is None:
     st.error("La aplicación no puede continuar debido a un error de conexión con Google Sheets.")
 else:
-    # <<<--- MODIFICACIÓN: Se captura la nueva lista de destinos de tarjeta.
     bancos, terceros, account_mappings, tarjetas_destinos = get_app_config(config_ws)
     opciones_destino = ["-- Seleccionar --"] + bancos + terceros + tarjetas_destinos
     opciones_agrupacion = list(range(1, 11))
@@ -490,7 +470,7 @@ else:
     # --- SECCIÓN DE DESCARGA DE REPORTES ANTERIORES ---
     st.divider()
     with st.expander("📥 Descargar Reportes Anteriores", expanded=False):
-        st.info("Busca un grupo por un rango de fechas y serie para generar y descargar sus archivos al instante.")
+        st.info("Busca todos los grupos dentro de un rango de fechas y serie para generar y descargar un **reporte consolidado**.")
         
         dl_col1, dl_col2, dl_col3 = st.columns(3)
         with dl_col1:
@@ -500,7 +480,7 @@ else:
         with dl_col3:
             download_serie = st.selectbox("Serie a buscar:", options=series_disponibles, key="dl_serie")
         
-        if st.button("Buscar Grupos para Descargar", use_container_width=True):
+        if st.button("Buscar y Preparar Reporte Consolidado", use_container_width=True):
             if end_date < start_date:
                 st.error("Error: La fecha de fin no puede ser anterior a la fecha de inicio.")
             else:
@@ -512,7 +492,6 @@ else:
                             data = all_values[1:]
                             all_records_df = pd.DataFrame(data, columns=headers)
                             
-                            # Eliminar columnas vacías si existen
                             if '' in all_records_df.columns:
                                 all_records_df = all_records_df.drop(columns=[''])
                             
@@ -529,78 +508,52 @@ else:
                             ].copy()
 
                             if not filtered_df.empty:
-                                filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
-                                filtered_df['Recibo N°'] = pd.to_numeric(filtered_df['Recibo N°'], errors='coerce')
-                                filtered_df.dropna(subset=['Valor Efectivo', 'Recibo N°'], inplace=True)
-                                
-                                st.session_state.downloadable_groups_df = filtered_df.groupby('Consecutivo Global').agg(
-                                    Recibos=('Recibo N°', lambda x: f"{int(x.min())}-{int(x.max())}"),
-                                    Total=('Valor Efectivo', 'sum')
-                                ).reset_index()
-                                
-                                st.session_state.full_download_data = filtered_df
+                                st.session_state.df_for_consolidated_download = filtered_df
+                                st.success(f"¡Búsqueda exitosa! Se encontraron {len(filtered_df['Consecutivo Global'].unique())} grupos. El reporte consolidado está listo para descargar.")
                             else:
                                 st.warning("No se encontraron grupos para el rango de fechas y serie seleccionados.")
-                                st.session_state.downloadable_groups_df = pd.DataFrame()
+                                if 'df_for_consolidated_download' in st.session_state:
+                                    del st.session_state.df_for_consolidated_download
                         else:
                             st.warning("No hay registros guardados para buscar.")
                 except Exception as e:
                     st.error(f"Ocurrió un error al buscar los registros: {e}")
 
-    if 'downloadable_groups_df' in st.session_state and not st.session_state.downloadable_groups_df.empty:
-        group_options = {
-            f"Global {row['Consecutivo Global']} (Recibos {row['Recibos']}, Total ${row['Total']:,.2f})": row['Consecutivo Global']
-            for _, row in st.session_state.downloadable_groups_df.iterrows()
-        }
-        
-        selected_group_display = st.selectbox(
-            "Selecciona un grupo para preparar su descarga:",
-            options=["-- Elige un grupo --"] + list(group_options.keys())
-        )
-
-        if selected_group_display != "-- Elige un grupo --":
-            global_consecutive_to_download = group_options[selected_group_display]
+        if 'df_for_consolidated_download' in st.session_state and not st.session_state.df_for_consolidated_download.empty:
+            df_for_download = st.session_state.df_for_consolidated_download.copy()
             
-            df_for_download = st.session_state.full_download_data[
-                st.session_state.full_download_data['Consecutivo Global'].astype(str) == str(global_consecutive_to_download)
-            ].copy()
-
             # Asegurar tipos de datos correctos para las funciones de generación
-            df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'])
-            df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'])
-            df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'])
-            
-            series_consecutive_dl = df_for_download['Consecutivo Serie'].iloc[0]
-            serie_dl = df_for_download['Serie'].iloc[0]
+            df_for_download['Valor Efectivo'] = pd.to_numeric(df_for_download['Valor Efectivo'], errors='coerce')
+            df_for_download['Agrupación'] = pd.to_numeric(df_for_download['Agrupación'], errors='coerce')
+            df_for_download['Recibo N°'] = pd.to_numeric(df_for_download['Recibo N°'], errors='coerce')
+            df_for_download.dropna(subset=['Valor Efectivo', 'Agrupación', 'Recibo N°'], inplace=True)
 
-            # --- CORRECCIÓN: Crear la columna unificada usando 'Serie_Factura' y 'Numero_Factura'
+            # Crear la columna unificada 'Serie-Número'
             if 'Serie_Factura' in df_for_download.columns and 'Numero_Factura' in df_for_download.columns:
                 s_factura = df_for_download['Serie_Factura'].fillna('S/D').astype(str)
                 n_factura = df_for_download['Numero_Factura'].fillna('S/D').astype(str)
                 df_for_download['Serie-Número'] = s_factura + "-" + n_factura
             else:
-                df_for_download['Serie-Número'] = "N/A" # Placeholder si los datos antiguos no tienen esta info
+                df_for_download['Serie-Número'] = "N/A"
 
-            # <<<--- MODIFICACIÓN: Se pasa la lista de destinos de tarjeta a la función.
-            txt_content_dl = generate_txt_content(df_for_download, account_mappings, series_consecutive_dl, global_consecutive_to_download, serie_dl, tarjetas_destinos)
+            # Generar archivos consolidados
+            txt_content_dl = generate_txt_content(df_for_download, account_mappings, tarjetas_destinos)
             excel_file_dl = generate_excel_report(df_for_download)
-
-            st.success(f"Archivos para el grupo Global {global_consecutive_to_download} listos para descargar.")
             
             dl_btn_col1, dl_btn_col2 = st.columns(2)
             with dl_btn_col1:
                 st.download_button(
-                    label="⬇️ Descargar Archivo TXT para el ERP",
+                    label="⬇️ Descargar Archivo TXT Consolidado",
                     data=txt_content_dl.encode('utf-8'),
-                    file_name=f"recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.txt",
-                    mime="text/plain", use_container_width=True, key=f"dl_txt_{global_consecutive_to_download}"
+                    file_name=f"recibos_consolidados_{download_serie}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.txt",
+                    mime="text/plain", use_container_width=True
                 )
             with dl_btn_col2:
                 st.download_button(
-                    label="📄 Descargar Reporte en Excel",
+                    label="📄 Descargar Reporte Excel Consolidado",
                     data=excel_file_dl,
-                    file_name=f"Reporte_Recibos_{serie_dl}_{global_consecutive_to_download}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key=f"dl_xls_{global_consecutive_to_download}"
+                    file_name=f"Reporte_Recibos_Consolidado_{download_serie}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
                 )
     st.divider()
 
@@ -611,7 +564,6 @@ else:
     col_mode_1, col_mode_2, col_mode_3 = st.columns([1,1,2])
     with col_mode_1:
         if st.button("🆕 Procesar Nuevo Archivo", use_container_width=True, type="primary" if st.session_state.mode == 'new' else "secondary"):
-            # Limpiar estado de sesión para un nuevo ciclo
             keys_to_keep = ['mode', 'google_credentials']
             for key in list(st.session_state.keys()):
                 if key not in keys_to_keep:
@@ -703,17 +655,9 @@ else:
                         st.session_state.full_search_results['Consecutivo Global'].astype(str) == str(global_consecutive_to_load)
                     ].copy()
 
-                    # Asegurar tipos de datos correctos
                     group_data_df['Valor Efectivo'] = pd.to_numeric(group_data_df['Valor Efectivo'])
                     group_data_df['Agrupación'] = pd.to_numeric(group_data_df['Agrupación'])
                     
-                    # <<<--- CORRECCIÓN CLAVE ---
-                    # Al cargar para editar, el DataFrame de detalle completo (st.session_state.df_full_detail)
-                    # DEBE contener las columnas originales de Serie y Número de factura.
-                    # Se renombran aquí para coincidir con el flujo de "nuevo archivo".
-                    # Esto asegura que cuando se guarden los cambios, las columnas necesarias existan.
-                    
-                    # Renombrar columnas para uso interno, incluyendo las de la factura
                     if 'Serie_Factura' in group_data_df.columns:
                         group_data_df.rename(columns={'Serie_Factura': 'SERIE_FACTURA'}, inplace=True)
                     if 'Numero_Factura' in group_data_df.columns:
@@ -758,29 +702,20 @@ else:
             )
 
         if uploaded_file is not None:
-            # Lógica para procesar el archivo solo una vez
             if 'df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name:
                 with st.spinner("Procesando archivo de Excel..."):
                     try:
-                        # 1. Cargar el archivo Excel.
                         df = pd.read_excel(uploaded_file, header=0)
-
-                        # 2. <<<--- MODIFICACIÓN CLAVE: Eliminar la última fila (total) antes de cualquier procesamiento.
                         df = df.iloc[:-1]
-
-                        # 3. Estandarizar nombres de columnas para mayor flexibilidad.
-                        # Se eliminan acentos, espacios y se convierte a mayúsculas.
                         df.columns = df.columns.str.strip().str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                         
-                        # 4. Mapear posibles nombres de columnas a un estándar interno.
-                        #    CORRECCIÓN: Se renombran NUMERO y SERIE para evitar conflictos.
                         column_mapping = {
                             'NUMRECIBO': ['NUMRECIBO', 'RECIBO', 'NUMERO RECIBO', 'N RECIBO'],
                             'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE', 'NOMBRE CLIENTE'],
                             'FECHA_RECIBO': ['FECHA_RECIBO', 'FECHA RECIBO', 'FECHA'],
                             'IMPORTE': ['IMPORTE', 'VALOR', 'TOTAL'],
-                            'NUMERO_FACTURA': ['NUMERO'], # Para el número de la factura individual
-                            'SERIE_FACTURA': ['SERIE']   # Para la serie de la factura individual
+                            'NUMERO_FACTURA': ['NUMERO'],
+                            'SERIE_FACTURA': ['SERIE']
                         }
                         
                         found_columns = {}
@@ -792,22 +727,17 @@ else:
                         
                         df.rename(columns=found_columns, inplace=True)
 
-                        # 5. Verificar que las columnas clave existan después del mapeo.
-                        #    CORRECCIÓN: Se buscan los nuevos nombres de columna.
                         required_columns = ['FECHA_RECIBO', 'NUMRECIBO', 'NOMBRECLIENTE', 'IMPORTE', 'NUMERO_FACTURA', 'SERIE_FACTURA']
                         missing_columns = [col for col in required_columns if col not in df.columns]
                         if missing_columns:
                             st.error(f"Error Crítico: No se pudieron encontrar las siguientes columnas requeridas: {', '.join(missing_columns)}")
                             st.stop()
                         
-                        # 6. Eliminar filas que no tengan un importe válido para limpiar el dataset.
                         df_cleaned = df.dropna(subset=['IMPORTE']).copy()
 
-                        # 7. Rellenar datos en caso de que el reporte use celdas combinadas.
                         for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
                             df_cleaned[col] = df_cleaned[col].ffill()
 
-                        # 8. Limpiar y convertir la columna de importe a formato numérico.
                         def clean_and_convert(value):
                             if isinstance(value, (int, float)): return float(value)
                             try:
@@ -822,8 +752,6 @@ else:
                             st.warning("Advertencia: No se encontraron datos válidos en el archivo.")
                             st.stop()
 
-                        # 9. Renombrar columnas para uso interno y formatear fecha.
-                        #    Las columnas 'NUMERO_FACTURA' y 'SERIE_FACTURA' se mantienen con su nombre.
                         df_full_detail = df_cleaned.rename(columns={
                             'FECHA_RECIBO': 'Fecha', 'NUMRECIBO': 'Recibo N°',
                             'NOMBRECLIENTE': 'Cliente', 'IMPORTE_LIMPIO': 'Valor Efectivo'
@@ -834,7 +762,6 @@ else:
                         
                         st.session_state.df_full_detail = df_full_detail.copy()
 
-                        # 10. Agrupar por recibo para la vista de edición en la UI.
                         df_summary = df_full_detail.groupby('Recibo N°').agg(
                             Fecha=('Fecha', 'first'),
                             Cliente=('Cliente', 'first'),
@@ -864,7 +791,6 @@ else:
         st.divider()
         st.header("3. Asigna Agrupación y Destinos")
         
-        # El total se calcula del dataframe de detalle para asegurar precisión
         total_recibos = st.session_state.df_full_detail['Valor Efectivo'].sum()
         st.metric(label="💰 Total Efectivo del Grupo", value=f"${total_recibos:,.2f}")
 
@@ -907,64 +833,75 @@ else:
             else:
                 with st.spinner("Guardando datos y generando archivos..."):
                     try:
+                        serie_seleccionada = st.session_state.editing_info['serie']
+                        final_df_to_process = pd.DataFrame() # DataFrame que contendrá todos los datos listos para guardar
+
                         if st.session_state.mode == 'new':
-                            st.info("Procesando como un NUEVO grupo...")
-                            global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
-                            serie_seleccionada = st.session_state.editing_info['serie']
-                            series_consecutive = get_next_series_consecutive(consecutivos_ws, serie_seleccionada)
+                            st.info("Procesando como un NUEVO grupo con consecutivos diarios...")
                             
-                            if global_consecutive is None or series_consecutive is None:
-                                st.error("No se pudieron obtener los consecutivos. Revisa la configuración en Google Sheets.")
-                                st.stop()
-                        
+                            df_full_detail_merged = pd.merge(
+                                st.session_state.df_full_detail,
+                                edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
+                                on='Recibo N°', how='left'
+                            )
+
+                            unique_dates = sorted(df_full_detail_merged['Fecha'].unique())
+                            processed_daily_dfs = []
+                            
+                            for date_str in unique_dates:
+                                global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
+                                series_consecutive = get_next_series_consecutive(consecutivos_ws, serie_seleccionada)
+
+                                if global_consecutive is None or series_consecutive is None:
+                                    st.error("No se pudieron obtener los consecutivos para la fecha {date_str}. Revisa la configuración en Google Sheets.")
+                                    st.stop()
+
+                                daily_df = df_full_detail_merged[df_full_detail_merged['Fecha'] == date_str].copy()
+                                daily_df['Consecutivo Global'] = global_consecutive
+                                daily_df['Consecutivo Serie'] = series_consecutive
+                                processed_daily_dfs.append(daily_df)
+                                
+                                # Actualizar consecutivos inmediatamente para el siguiente día
+                                update_global_consecutive(global_consecutivo_ws, global_consecutive)
+                                update_series_consecutive(consecutivos_ws, serie_seleccionada, series_consecutive)
+                            
+                            final_df_to_process = pd.concat(processed_daily_dfs)
+
                         elif st.session_state.mode == 'edit':
                             st.info("Procesando como una EDICIÓN de grupo existente...")
                             global_consecutive = st.session_state.editing_info['global_consecutive']
                             series_consecutive = st.session_state.editing_info['series_consecutive']
-                            serie_seleccionada = st.session_state.editing_info['serie']
                             
                             delete_existing_records(registros_recibos_ws, global_consecutive)
 
-                        # --- Combinar decisiones de la UI con los datos de detalle ---
-                        df_full_detail = st.session_state.df_full_detail.copy()
-                        
-                        # Eliminar columnas viejas de Agrupación/Destino si existen en el df de detalle para evitar conflictos
-                        if 'Agrupación' in df_full_detail.columns:
-                            df_full_detail = df_full_detail.drop(columns=['Agrupación'])
-                        if 'Destino' in df_full_detail.columns:
-                            df_full_detail = df_full_detail.drop(columns=['Destino'])
-                        
-                        final_detailed_df = pd.merge(
-                            df_full_detail,
-                            edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
-                            on='Recibo N°',
-                            how='left'
-                        )
+                            df_full_detail_merged = pd.merge(
+                                st.session_state.df_full_detail,
+                                edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
+                                on='Recibo N°', how='left'
+                            )
+                            df_full_detail_merged['Consecutivo Global'] = global_consecutive
+                            df_full_detail_merged['Consecutivo Serie'] = series_consecutive
+                            final_df_to_process = df_full_detail_merged
 
-                        # <<<--- CORRECCIÓN: Crear la columna unificada 'Serie-Número' para los reportes
-                        # Se asegura de que ambas columnas sean string antes de unirlas.
-                        # Esta es la línea que causaba el error y ahora funcionará porque las columnas se conservaron.
-                        final_detailed_df['Serie-Número'] = final_detailed_df['SERIE_FACTURA'].astype(str) + "-" + final_detailed_df['NUMERO_FACTURA'].astype(str)
+                        # --- Generación de archivos y guardado (común para ambos modos) ---
+                        
+                        final_df_to_process['Serie-Número'] = final_df_to_process['SERIE_FACTURA'].astype(str) + "-" + final_df_to_process['NUMERO_FACTURA'].astype(str)
 
-                        # <<<--- MODIFICACIÓN: Se pasa la lista de destinos de tarjeta a la función.
-                        txt_content = generate_txt_content(final_detailed_df, account_mappings, series_consecutive, global_consecutive, serie_seleccionada, tarjetas_destinos)
-                        excel_file = generate_excel_report(final_detailed_df)
+                        # Usar la nueva función de TXT que maneja múltiples consecutivos
+                        txt_content = generate_txt_content(final_df_to_process, account_mappings, tarjetas_destinos)
+                        excel_file = generate_excel_report(final_df_to_process.copy()) # Enviar copia para evitar mutación
 
                         # Preparar datos para guardar en Google Sheets
-                        registros_data_df = final_detailed_df.copy()
+                        registros_data_df = final_df_to_process.copy()
                         registros_data_df['Serie'] = serie_seleccionada
-                        registros_data_df['Consecutivo Serie'] = series_consecutive
-                        registros_data_df['Consecutivo Global'] = global_consecutive
                         registros_data_df['Timestamp'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-                        # Alinear con las cabeceras de Google Sheets
                         gsheet_headers = registros_recibos_ws.row_values(1)
                         registros_to_append = pd.DataFrame(columns=gsheet_headers)
 
                         for col in gsheet_headers:
                             if col in registros_data_df.columns:
                                 registros_to_append[col] = registros_data_df[col]
-                            # CORRECCIÓN: Se renombraron las columnas con nombres de factura para evitar conflicto
                             elif col == 'Serie_Factura' and 'SERIE_FACTURA' in registros_data_df.columns:
                                 registros_to_append[col] = registros_data_df['SERIE_FACTURA']
                             elif col == 'Numero_Factura' and 'NUMERO_FACTURA' in registros_data_df.columns:
@@ -972,43 +909,40 @@ else:
                             else:
                                 registros_to_append[col] = ''
                         
-                        # Reordenar y convertir a lista de listas
                         registros_to_append = registros_to_append[gsheet_headers]
                         registros_data = registros_to_append.fillna('').values.tolist()
                         
                         registros_recibos_ws.append_rows(registros_data, value_input_option='USER_ENTERED')
                         
-                        # Actualizar consecutivos solo si es un nuevo registro
-                        if st.session_state.mode == 'new':
-                            update_series_consecutive(consecutivos_ws, serie_seleccionada, series_consecutive)
-                            update_global_consecutive(global_consecutivo_ws, global_consecutive)
-                        
                         st.success("✅ ¡Éxito! Los datos han sido guardados en Google Sheets.")
 
                         st.subheader("5. Descargar Archivos")
                         dl_col1, dl_col2 = st.columns(2)
+                        
+                        # Generar un identificador único para el nombre de archivo
+                        file_identifier = f"{serie_seleccionada}_{final_df_to_process['Consecutivo Global'].min()}_{datetime.now().strftime('%Y%m%d')}"
+                        
                         with dl_col1:
                             st.download_button(
                                 label="⬇️ Descargar Archivo TXT para el ERP",
                                 data=txt_content.encode('utf-8'),
-                                file_name=f"recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.txt",
+                                file_name=f"recibos_{file_identifier}.txt",
                                 mime="text/plain", use_container_width=True
                             )
                         with dl_col2:
                             st.download_button(
                                 label="📄 Descargar Reporte Detallado en Excel",
                                 data=excel_file,
-                                file_name=f"Reporte_Recibos_{serie_seleccionada}_{global_consecutive}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                                file_name=f"Reporte_Recibos_{file_identifier}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
                             )
 
-                        # Limpiar el estado de la sesión para el próximo uso
                         keys_to_clear = [k for k in st.session_state.keys() if k not in ['mode', 'google_credentials']]
                         for key in keys_to_clear:
                             del st.session_state[key]
                         
                         st.info("El proceso ha finalizado. La página se recargará para iniciar un nuevo ciclo.")
-                        time.sleep(5) # Dar tiempo al usuario para ver el mensaje
+                        time.sleep(5)
                         st.rerun()
 
                     except Exception as e:
