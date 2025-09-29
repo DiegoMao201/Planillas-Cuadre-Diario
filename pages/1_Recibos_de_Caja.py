@@ -853,7 +853,7 @@ else:
                                 series_consecutive = get_next_series_consecutive(consecutivos_ws, serie_seleccionada)
 
                                 if global_consecutive is None or series_consecutive is None:
-                                    st.error("No se pudieron obtener los consecutivos para la fecha {date_str}. Revisa la configuración en Google Sheets.")
+                                    st.error(f"No se pudieron obtener los consecutivos para la fecha {date_str}. Revisa la configuración en Google Sheets.")
                                     st.stop()
 
                                 daily_df = df_full_detail_merged[df_full_detail_merged['Fecha'] == date_str].copy()
@@ -885,6 +885,9 @@ else:
 
                         # --- Generación de archivos y guardado (común para ambos modos) ---
                         
+                        # <-- CORRECCIÓN CLAVE: Asegurarse de que la columna 'Serie' exista ANTES de generar archivos.
+                        final_df_to_process['Serie'] = serie_seleccionada
+                        
                         final_df_to_process['Serie-Número'] = final_df_to_process['SERIE_FACTURA'].astype(str) + "-" + final_df_to_process['NUMERO_FACTURA'].astype(str)
 
                         # Usar la nueva función de TXT que maneja múltiples consecutivos
@@ -893,7 +896,6 @@ else:
 
                         # Preparar datos para guardar en Google Sheets
                         registros_data_df = final_df_to_process.copy()
-                        registros_data_df['Serie'] = serie_seleccionada
                         registros_data_df['Timestamp'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
                         gsheet_headers = registros_recibos_ws.row_values(1)
