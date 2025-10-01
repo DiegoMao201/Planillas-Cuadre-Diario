@@ -1,6 +1,6 @@
 # ======================================================================================
 # ARCHIVO: 2_Viaticos.py
-# VERSIÓN: Módulo de Gestión de Viáticos v1.0
+# VERSIÓN: Módulo de Gestión de Viáticos v1.1 (Corregido)
 # ======================================================================================
 import streamlit as st
 import gspread
@@ -369,10 +369,29 @@ def main():
             st.header("Formulario de Registro de Viáticos", anchor=False)
             st.subheader("1. Información del Reporte", anchor=False, divider="red")
 
-            col1, col2, col3 = st.columns(3)
+            # --- SECCIÓN CORREGIDA ---
+            col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
             st.session_state.viaticos_empleado = col1.selectbox("Empleado", options=empleados, key="sb_empleado")
             st.session_state.viaticos_sede = col2.selectbox("Sede de Trabajo", options=sedes, key="sb_sede")
-            st.session_state.viaticos_mes = col3.date_input("Mes del Reporte", value=datetime.now().date().replace(day=1), format="MM/YYYY", key="di_mes")
+            
+            current_year = datetime.now().year
+            current_month = datetime.now().month
+            
+            selected_year = col3.selectbox(
+                "Año", 
+                options=range(current_year + 1, current_year - 5, -1),
+                key="sb_year"
+            )
+            selected_month = col4.selectbox(
+                "Mes", 
+                options=range(1, 13), 
+                format_func=lambda month: datetime(current_year, month, 1).strftime("%B"),
+                index=current_month - 1,
+                key="sb_month"
+            )
+            
+            st.session_state.viaticos_mes = datetime(selected_year, selected_month, 1).date()
+            # --- FIN DE LA SECCIÓN CORREGIDA ---
 
             # Botón para limpiar solo los gastos
             if st.button("✨ Iniciar Nuevo Reporte (limpiar gastos)", use_container_width=True):
