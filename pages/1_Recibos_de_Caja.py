@@ -24,9 +24,9 @@ st.set_page_config(layout="wide", page_title="Recibos de Caja")
 st.title("🧾 Procesamiento de Recibos de Caja v5.5 (Consolidación y Consecutivos Diarios)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
-1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
-2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
-3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
+1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
+2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
+3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
@@ -120,6 +120,8 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
         # --- 1. PROCESAR REGISTROS INDIVIDUALES (DÉBITOS) ---
         df_individual = group_df[group_df['Agrupación'] == 1].copy()
         if not df_individual.empty:
+            # En el df original (df_full_detail) hay una fila por recibo-factura (detalle), por eso se suma.
+            # Se agrupa por Recibo N° para obtener el total del recibo.
             individual_grouped = df_individual.groupby('Recibo N°').agg(
                 Valor_Total=('Valor Efectivo', 'sum'),
                 Fecha=('Fecha', 'first'),
@@ -155,6 +157,7 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
         # --- 2. PROCESAR REGISTROS AGRUPADOS (DÉBITOS) ---
         df_agrupado = group_df[group_df['Agrupación'] > 1]
         if not df_agrupado.empty:
+            # Se agrupa por Agrupación y Destino para consolidar los débitos.
             grouped = df_agrupado.groupby(['Agrupación', 'Destino']).agg(
                 Valor_Total=('Valor Efectivo', 'sum'),
                 Fecha_Primera=('Fecha', 'first'),
@@ -338,8 +341,8 @@ def generate_excel_report(df):
                     # Usar la longitud de la celda de cabecera como mínimo si es muy corta
                     current_length = len(str(cell.value))
                     if row_idx == 1:
-                         current_length = max(len(column_cells[0].value), current_length)
-                         
+                            current_length = max(len(column_cells[0].value), current_length)
+                            
                     if current_length > max_length:
                         max_length = current_length
                 except:
@@ -635,13 +638,17 @@ else:
                                     # Guardar el detalle completo (esto es lo que se re-guardará)
                                     st.session_state.df_full_detail = filtered_df.copy()
                                     
+                                    # --- CORRECCIÓN CLAVE: Usar 'first' en lugar de 'sum' para Valor Efectivo ---
+                                    # El valor en GS ya es el total del recibo, sumarlo duplicaría el valor.
                                     df_summary_edit = filtered_df.groupby('Recibo N°').agg(
                                         Fecha=('Fecha', 'first'),
                                         Cliente=('Cliente', 'first'),
-                                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'),
+                                        Valor_Efectivo_Total=('Valor Efectivo', 'first'), # <--- CAMBIO DE 'sum' a 'first' (o 'max', 'min' si todos son iguales)
                                         Agrupación=('Agrupación', 'first'),
                                         Destino=('Destino', 'first')
                                     ).reset_index()
+                                    # --- FIN CORRECCIÓN ---
+
                                     df_summary_edit.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
                                     st.session_state.df_for_display = df_summary_edit[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
                                     
@@ -739,6 +746,7 @@ else:
         st.divider()
         st.header("3. Asigna Agrupación y Destinos")
         
+        # El total se calcula correctamente de la suma de los valores totales del recibo.
         st.metric(label="💰 Total Efectivo del Grupo", value=f"${st.session_state.df_full_detail['Valor Efectivo'].sum():,.2f}")
         
         # Mostrar qué consecutivos globales se están editando
@@ -825,10 +833,10 @@ else:
                             # Eliminar todos los registros antiguos. Se pasa la lista.
                             delete_existing_records(registros_recibos_ws, global_consecutives_to_delete)
 
-                            # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original
+                            # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original (que viene del Sheet)
                             df_to_update = st.session_state.df_full_detail.drop(columns=['Agrupación', 'Destino'], errors='ignore')
                             
-                            # 2. Re-mergear con las nuevas agrupaciones/destinos de la tabla editada
+                            # 2. Re-mergear con las nuevas agrupaciones/destinos de la tabla editada (edited_summary_df)
                             df_full_detail_merged = pd.merge(
                                 df_to_update,
                                 edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
