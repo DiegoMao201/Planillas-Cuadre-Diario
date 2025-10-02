@@ -24,9 +24,9 @@ st.set_page_config(layout="wide", page_title="Recibos de Caja")
 st.title("🧾 Procesamiento de Recibos de Caja v5.5 (Consolidación y Consecutivos Diarios)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
-1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
-2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
-3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
+1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
+2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
+3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardar.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
@@ -38,6 +38,7 @@ def connect_to_gsheet():
     Devuelve los objetos de las hojas de cálculo necesarias.
     """
     try:
+        # Asume que las credenciales están en st.secrets["google_credentials"]
         creds_json = dict(st.secrets["google_credentials"])
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
@@ -107,9 +108,9 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
     if df.empty:
         return ""
 
-    # Agrupa por el consecutivo global para procesar cada lote (diario) por separado.
-    # Se asegura que el Consecutivo Global sea string para la agrupación.
+    # Asegurar tipos y limpiar para la agrupación
     df['Consecutivo Global'] = df['Consecutivo Global'].astype(str)
+    df['Valor Efectivo'] = pd.to_numeric(df['Valor Efectivo'], errors='coerce').fillna(0)
 
     for global_consecutive, group_df in df.groupby('Consecutivo Global'):
         # Extrae datos comunes del lote.
@@ -120,7 +121,6 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
         # --- 1. PROCESAR REGISTROS INDIVIDUALES (DÉBITOS) ---
         df_individual = group_df[group_df['Agrupación'] == 1].copy()
         if not df_individual.empty:
-            # En el df original (df_full_detail) hay una fila por recibo-factura (detalle), por eso se suma.
             # Se agrupa por Recibo N° para obtener el total del recibo.
             individual_grouped = df_individual.groupby('Recibo N°').agg(
                 Valor_Total=('Valor Efectivo', 'sum'),
@@ -218,9 +218,10 @@ def generate_excel_report(df):
     # Asegurar que las columnas numéricas y de fecha tengan el tipo correcto.
     df['Recibo N°'] = pd.to_numeric(df['Recibo N°'], errors='coerce')
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
+    df['Valor Efectivo'] = pd.to_numeric(df['Valor Efectivo'], errors='coerce')
     # Convertir a datetime antes de ordenar para evitar problemas de formato de texto.
     df['Fecha_dt'] = pd.to_datetime(df['Fecha'], format='%d/%m/%Y', errors='coerce') 
-    df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt'], inplace=True)
+    df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt', 'Valor Efectivo'], inplace=True)
     
     # Reordenar las columnas para una presentación lógica en Excel.
     preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
@@ -228,10 +229,8 @@ def generate_excel_report(df):
     df = df[excel_columns]
     
     # Ordenar por fecha primero, luego por agrupación y recibo.
-    df.sort_values(by=['Fecha_dt', 'Agrupación', 'Recibo N°'], inplace=True, key=lambda x: x.map(lambda d: pd.to_datetime(d, format='%d/%m/%Y', errors='coerce')) if x.name == 'Fecha' else x)
+    df.sort_values(by=['Fecha_dt', 'Agrupación', 'Recibo N°'], inplace=True)
     
-    # La columna 'Fecha' ya está como string '%d/%m/%Y' desde la carga o edición.
-
     # Separar datos en individuales y grupos de consignación.
     df_individual = df[df['Agrupación'] == 1].copy()
     df_grouped = df[df['Agrupación'] > 1].copy()
@@ -341,8 +340,8 @@ def generate_excel_report(df):
                     # Usar la longitud de la celda de cabecera como mínimo si es muy corta
                     current_length = len(str(cell.value))
                     if row_idx == 1:
-                            current_length = max(len(column_cells[0].value), current_length)
-                            
+                        current_length = max(len(column_cells[0].value), current_length)
+                        
                     if current_length > max_length:
                         max_length = current_length
                 except:
@@ -502,6 +501,11 @@ else:
                             all_records_df = all_records_df.drop(columns=[''], errors='ignore')
                             all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                             all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
+                            
+                            # Asegurar que 'Valor Efectivo' es numérico.
+                            all_records_df['Valor Efectivo'] = pd.to_numeric(all_records_df['Valor Efectivo'], errors='coerce')
+                            all_records_df.dropna(subset=['Valor Efectivo'], inplace=True)
+
 
                             # Filtrar por rango de fechas y serie. Se usa .dt.date para comparar solo la fecha.
                             filtered_df = all_records_df[
@@ -615,6 +619,11 @@ else:
                                 # Convertir fecha para poder comparar rangos
                                 all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                                 all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
+                                
+                                # Convertir valor efectivo a numérico
+                                all_records_df['Valor Efectivo'] = pd.to_numeric(all_records_df['Valor Efectivo'], errors='coerce')
+                                all_records_df['Agrupación'] = pd.to_numeric(all_records_df['Agrupación'], errors='coerce')
+                                all_records_df.dropna(subset=['Valor Efectivo', 'Agrupación'], inplace=True)
 
                                 # Filtrar para encontrar todos los registros en el rango.
                                 filtered_df = all_records_df[
@@ -631,19 +640,16 @@ else:
                                     # Obtener la lista de TODOS los Consecutivos Globales encontrados
                                     global_consecutives_to_load = filtered_df['Consecutivo Global'].unique().tolist()
                                     
-                                    # Preparar el DataFrame para la edición. Mantenemos solo un registro por Recibo N° con la suma total.
-                                    filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
-                                    filtered_df['Agrupación'] = pd.to_numeric(filtered_df['Agrupación'], errors='coerce')
-
                                     # Guardar el detalle completo (esto es lo que se re-guardará)
                                     st.session_state.df_full_detail = filtered_df.copy()
                                     
-                                    # --- CORRECCIÓN CLAVE: Usar 'first' en lugar de 'sum' para Valor Efectivo ---
-                                    # El valor en GS ya es el total del recibo, sumarlo duplicaría el valor.
+                                    # --- CORRECCIÓN CLAVE: Usar 'sum' para Valor Efectivo ---
+                                    # Se agrupa por 'Recibo N°' y se SUMAN todos los valores de las líneas/facturas
+                                    # asociadas a ese recibo, que es su valor total.
                                     df_summary_edit = filtered_df.groupby('Recibo N°').agg(
                                         Fecha=('Fecha', 'first'),
                                         Cliente=('Cliente', 'first'),
-                                        Valor_Efectivo_Total=('Valor Efectivo', 'first'), # <--- CAMBIO DE 'sum' a 'first' (o 'max', 'min' si todos son iguales)
+                                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'), # <--- CORRECCIÓN CLAVE: Usar 'sum'
                                         Agrupación=('Agrupación', 'first'),
                                         Destino=('Destino', 'first')
                                     ).reset_index()
@@ -655,7 +661,8 @@ else:
                                     # Guardar los consecutivos para la fase de guardado y eliminación.
                                     st.session_state.editing_info = {
                                         'global_consecutives_to_delete': global_consecutives_to_load,
-                                        'series_consecutive': filtered_df['Consecutivo Serie'].iloc[0], # Se toma el primero, se asume que todos tienen el mismo si es edición de un lote.
+                                        # Se toma el consecutivo de serie de la primera fila. Se asume que es el mismo para todo el lote.
+                                        'series_consecutive': filtered_df['Consecutivo Serie'].iloc[0], 
                                         'serie': search_serie
                                     }
                                     st.success(f"Cargados {len(st.session_state.df_for_display)} recibos de {len(global_consecutives_to_load)} lotes (Consecutivos Globales: {', '.join(map(str, global_consecutives_to_load))}).")
@@ -683,9 +690,10 @@ else:
                 type=['xlsx', 'xls']
             )
 
-        if uploaded_file and ('df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name):
+        if uploaded_file and ('df_for_display' not in st.session_state or st.session_state.get('uploaded_file_name') != uploaded_file.name or st.session_state.editing_info.get('serie') != serie_seleccionada):
             with st.spinner("Procesando archivo de Excel..."):
                 try:
+                    # Se lee el archivo y se omite la última fila si es el total.
                     df = pd.read_excel(uploaded_file, header=0).iloc[:-1]
                     df.columns = df.columns.str.strip().str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     
@@ -700,7 +708,8 @@ else:
                     # Validar columnas y limpiar datos
                     df_cleaned = df.dropna(subset=['IMPORTE']).copy()
                     for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
-                        df_cleaned[col] = df_cleaned[col].ffill()
+                        # Llena los valores nulos con el anterior (útil si el reporte tiene una sola fila de encabezado por recibo)
+                        df_cleaned[col] = df_cleaned[col].ffill() 
                     
                     df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(
                         lambda x: pd.to_numeric(str(x).replace('$', '').strip().replace('.', '').replace(',', '.'), errors='coerce')
@@ -715,7 +724,7 @@ else:
                     if pd.api.types.is_datetime64_any_dtype(df_full_detail['Fecha']):
                         df_full_detail['Fecha'] = pd.to_datetime(df_full_detail['Fecha']).dt.strftime('%d/%m/%Y')
                     
-                    # CORRECCIÓN: Asegurar que las columnas de factura existan para el merge posterior
+                    # Asegurar que las columnas de factura existan para el merge posterior
                     if 'NUMERO_FACTURA' not in df_full_detail.columns:
                         df_full_detail['NUMERO_FACTURA'] = ""
                     if 'SERIE_FACTURA' not in df_full_detail.columns:
@@ -723,10 +732,11 @@ else:
                         
                     st.session_state.df_full_detail = df_full_detail.copy()
 
+                    # Resumen para la tabla editable: Agrupar por recibo y sumar el valor de todas las líneas (facturas).
                     df_summary = df_full_detail.groupby('Recibo N°').agg(
                         Fecha=('Fecha', 'first'),
                         Cliente=('Cliente', 'first'),
-                        Valor_Efectivo_Total=('Valor Efectivo', 'sum')
+                        Valor_Efectivo_Total=('Valor Efectivo', 'sum') # <-- Siempre sumamos para obtener el total del recibo.
                     ).reset_index()
                     df_summary.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
                     df_summary['Agrupación'] = 1
@@ -759,12 +769,16 @@ else:
         with st.expander("Herramientas de asignación masiva"):
             col1, col2 = st.columns(2)
             with col1:
-                destino_masivo = st.selectbox("Asignar destino a todos:", options=opciones_destino)
-                if st.button("Aplicar Destino", use_container_width=True) and destino_masivo != "-- Seleccionar --":
-                    st.session_state.df_for_display['Destino'] = destino_masivo
-                    st.rerun()
+                destino_masivo = st.selectbox("Asignar destino a todos:", options=opciones_destino, key='destino_masivo_sb')
+                if st.button("Aplicar Destino", use_container_width=True):
+                    if destino_masivo != "-- Seleccionar --":
+                        st.session_state.df_for_display['Destino'] = destino_masivo
+                        st.rerun()
+                    else:
+                        st.warning("Selecciona un destino válido.")
+
             with col2:
-                agrupacion_masiva = st.selectbox("Asignar grupo a todos:", options=opciones_agrupacion)
+                agrupacion_masiva = st.selectbox("Asignar grupo a todos:", options=opciones_agrupacion, key='agrupacion_masiva_sb')
                 if st.button("Aplicar Grupo", use_container_width=True):
                     st.session_state.df_for_display['Agrupación'] = agrupacion_masiva
                     st.rerun()
@@ -777,7 +791,8 @@ else:
             column_config={
                 "Agrupación": st.column_config.SelectboxColumn("Agrupación", help="Grupo 1 es individual. Grupos >1 se sumarán.", options=opciones_agrupacion, required=True),
                 "Destino": st.column_config.SelectboxColumn("Destino del Efectivo", help="Selecciona el banco o tercero.", options=opciones_destino, required=True),
-                "Valor Efectivo": st.column_config.NumberColumn("Valor Total Recibo", format="$ %.2f", disabled=True),
+                # El valor debe ser disabled, es el total del recibo.
+                "Valor Efectivo": st.column_config.NumberColumn("Valor Total Recibo", format="$ %.2f", disabled=True), 
                 "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
                 "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
                 "Recibo N°": st.column_config.NumberColumn("Recibo N°", disabled=True),
@@ -800,6 +815,7 @@ else:
                         if st.session_state.mode == 'new':
                             st.info("Procesando como un NUEVO grupo con consecutivos diarios...")
                             
+                            # Merge con las nuevas agrupaciones/destinos.
                             df_full_detail_merged = pd.merge(st.session_state.df_full_detail, edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']], on='Recibo N°', how='left')
                             
                             processed_daily_dfs = []
@@ -830,7 +846,7 @@ else:
                             global_consecutives_to_delete = st.session_state.editing_info['global_consecutives_to_delete']
                             series_consecutive = st.session_state.editing_info['series_consecutive'] # Se reutiliza el consecutivo de la serie.
                             
-                            # Eliminar todos los registros antiguos. Se pasa la lista.
+                            # Eliminar todos los registros antiguos.
                             delete_existing_records(registros_recibos_ws, global_consecutives_to_delete)
 
                             # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original (que viene del Sheet)
@@ -844,18 +860,19 @@ else:
                                 how='left'
                             )
 
-                            # Reasignar los Consecutivos Globales y de Serie originales para que se guarden en las mismas transacciones diarias.
+                            # 3. Reasignar los Consecutivos Globales y de Serie originales para que se guarden en las mismas transacciones diarias.
                             final_df_to_process = df_full_detail_merged.copy()
-                            
-                            # El merge puede haber perdido las columnas originales, reasignarlas desde la copia completa.
                             final_df_to_process['Consecutivo Global'] = st.session_state.df_full_detail['Consecutivo Global']
-                            final_df_to_process['Consecutivo Serie'] = series_consecutive # Se asume que el consecutivo de serie es el mismo para todo el lote editado.
+                            final_df_to_process['Consecutivo Serie'] = series_consecutive 
 
 
                         # --- Generación de archivos y guardado (común para ambos modos) ---
                         
                         final_df_to_process['Serie'] = serie_seleccionada
-                        final_df_to_process['Serie-Número'] = final_df_to_process['SERIE_FACTURA'].astype(str) + "-" + final_df_to_process['NUMERO_FACTURA'].astype(str)
+                        final_df_to_process['Serie-Número'] = final_df_to_process['SERIE_FACTURA'].astype(str).fillna('S/D') + "-" + final_df_to_process['NUMERO_FACTURA'].astype(str).fillna('S/D')
+                        
+                        # Se asegura que 'Valor Efectivo' es numérico antes de generar el TXT/Excel
+                        final_df_to_process['Valor Efectivo'] = pd.to_numeric(final_df_to_process['Valor Efectivo'], errors='coerce').fillna(0)
 
                         txt_content = generate_txt_content(final_df_to_process, account_mappings, tarjetas_destinos)
                         excel_file = generate_excel_report(final_df_to_process.copy())
@@ -886,6 +903,9 @@ else:
                         
                         for df_col, gsheet_col in col_map.items():
                             if df_col in registros_data_df.columns and gsheet_col in gsheet_headers:
+                                # Reemplazar NaN en 'Valor Efectivo' con string vacío para evitar errores de tipo en GS
+                                if gsheet_col == 'Valor Efectivo':
+                                    registros_data_df[df_col] = registros_data_df[df_col].apply(lambda x: x if pd.notna(x) else '')
                                 registros_to_append_df[gsheet_col] = registros_data_df[df_col]
                         
                         registros_to_append_df = registros_to_append_df[gsheet_headers].fillna('')
@@ -896,7 +916,9 @@ else:
                         st.subheader("5. Descargar Archivos")
                         dl_col1, dl_col2 = st.columns(2)
                         
-                        file_identifier = f"{serie_seleccionada}_{final_df_to_process['Consecutivo Global'].min()}_to_{final_df_to_process['Consecutivo Global'].max()}_{datetime.now().strftime('%Y%m%d')}"
+                        global_min = final_df_to_process['Consecutivo Global'].min()
+                        global_max = final_df_to_process['Consecutivo Global'].max()
+                        file_identifier = f"{serie_seleccionada}_{global_min}_to_{global_max}_{datetime.now().strftime('%Y%m%d')}"
                         
                         with dl_col1:
                             st.download_button(
