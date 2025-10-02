@@ -555,43 +555,53 @@ else:
         st.info("Busca un grupo de recibos que ya hayas procesado para cargarlo y modificarlo.")
         
         with st.container(border=True):
-            search_col1, search_col2 = st.columns(2)
+            search_col1, search_col2, search_col3 = st.columns(3)
             with search_col1:
-                search_date = st.date_input("Fecha de los recibos:", datetime.now())
+                search_start_date = st.date_input("Fecha de inicio:", datetime.now(), key="edit_start_date")
             with search_col2:
+                search_end_date = st.date_input("Fecha de fin:", datetime.now(), key="edit_end_date")
+            with search_col3:
                 search_serie = st.selectbox("Serie de los recibos:", options=series_disponibles, key="search_serie")
             
             if st.button("Buscar Grupos para Editar", use_container_width=True):
-                try:
-                    with st.spinner("Buscando, por favor espera..."):
-                        all_values = registros_recibos_ws.get_all_values()
-                        
-                        if len(all_values) < 2:
-                            st.warning("No hay registros en la hoja para buscar.")
-                        else:
-                            headers = all_values[0]
-                            all_records_df = pd.DataFrame(all_values[1:], columns=headers)
-                            all_records_df = all_records_df.drop(columns=[''], errors='ignore')
+                if search_end_date < search_start_date:
+                    st.error("Error: La fecha de fin no puede ser anterior a la fecha de inicio.")
+                else:
+                    try:
+                        with st.spinner("Buscando, por favor espera..."):
+                            all_values = registros_recibos_ws.get_all_values()
                             
-                            # Filtrar para encontrar grupos que tengan registros en la fecha y serie buscadas.
-                            filtered_df = all_records_df[
-                                (all_records_df['Fecha'] == search_date.strftime('%d/%m/%Y')) & 
-                                (all_records_df['Serie'] == search_serie)
-                            ]
-                            
-                            if not filtered_df.empty:
-                                # Agrupar por consecutivo para mostrar un resumen al usuario.
-                                st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
-                                    Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x, errors='coerce').min()}-{pd.to_numeric(x, errors='coerce').max()}"),
-                                    Total=('Valor Efectivo', lambda x: pd.to_numeric(x, errors='coerce').sum())
-                                ).reset_index()
-                                # Guarda el DataFrame completo para usarlo después de la selección.
-                                st.session_state.full_search_results = all_records_df
+                            if len(all_values) < 2:
+                                st.warning("No hay registros en la hoja para buscar.")
                             else:
-                                st.session_state.found_groups = pd.DataFrame()
-                                st.warning("No se encontraron grupos para esa fecha y serie.")
-                except Exception as e:
-                    st.error(f"Error al buscar registros: {e}")
+                                headers = all_values[0]
+                                all_records_df = pd.DataFrame(all_values[1:], columns=headers)
+                                all_records_df = all_records_df.drop(columns=[''], errors='ignore')
+                                
+                                # Convertir fecha para poder comparar rangos
+                                all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
+                                all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
+
+                                # Filtrar para encontrar grupos que tengan registros en el rango de fechas y serie buscadas.
+                                filtered_df = all_records_df[
+                                    (all_records_df['Fecha_dt'] >= pd.to_datetime(search_start_date)) & 
+                                    (all_records_df['Fecha_dt'] <= pd.to_datetime(search_end_date)) &
+                                    (all_records_df['Serie'] == search_serie)
+                                ]
+                                
+                                if not filtered_df.empty:
+                                    # Agrupar por consecutivo para mostrar un resumen al usuario.
+                                    st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
+                                        Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x, errors='coerce').min()}-{pd.to_numeric(x, errors='coerce').max()}"),
+                                        Total=('Valor Efectivo', lambda x: pd.to_numeric(x, errors='coerce').sum())
+                                    ).reset_index()
+                                    # Guarda el DataFrame completo para usarlo después de la selección.
+                                    st.session_state.full_search_results = all_records_df
+                                else:
+                                    st.session_state.found_groups = pd.DataFrame()
+                                    st.warning("No se encontraron grupos para ese rango de fechas y serie.")
+                    except Exception as e:
+                        st.error(f"Error al buscar registros: {e}")
 
             if 'found_groups' in st.session_state and not st.session_state.found_groups.empty:
                 st.markdown("---")
