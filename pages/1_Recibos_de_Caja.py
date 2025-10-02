@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.6 (Consolidación y Consecutivos Diarios)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.5 (Consolidación y Consecutivos Diarios)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
@@ -215,30 +215,17 @@ def generate_excel_report(df):
     """
     output = BytesIO()
     
-    # --- CORRECCIÓN BUG 2: Limpiar nombres de columna antes de usarlos ---
-    # Esto asegura que no haya KeyErrors por espacios ocultos (ej: 'Recibo N° ' vs 'Recibo N°')
-    df.columns = df.columns.str.strip()
-    # ----------------------------------------------------------------------
-    
     # Asegurar que las columnas numéricas y de fecha tengan el tipo correcto.
     df['Recibo N°'] = pd.to_numeric(df['Recibo N°'], errors='coerce')
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
     df['Valor Efectivo'] = pd.to_numeric(df['Valor Efectivo'], errors='coerce')
-
-    # Verificar que la columna 'Fecha' exista, ya que es fundamental
-    if 'Fecha' not in df.columns:
-        # En el contexto de Streamlit, se debe manejar el error y retornar
-        st.error("Error al generar el Excel: La columna 'Fecha' no se encontró en el DataFrame.")
-        return output.getvalue()
-        
     # Convertir a datetime antes de ordenar para evitar problemas de formato de texto.
     df['Fecha_dt'] = pd.to_datetime(df['Fecha'], format='%d/%m/%Y', errors='coerce') 
     df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt', 'Valor Efectivo'], inplace=True)
     
     # Reordenar las columnas para una presentación lógica en Excel.
     preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
-    # Asegurar que solo se seleccionan columnas que realmente existen
-    excel_columns = [col for col in preferred_order if col in df.columns] + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
+    excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
     df = df[excel_columns]
     
     # Ordenar por fecha primero, luego por agrupación y recibo.
@@ -260,14 +247,8 @@ def generate_excel_report(df):
             
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
-            # Manejo de índices con verificación
-            try:
-                cliente_col_idx = excel_columns.index('Cliente')
-                valor_col_idx = excel_columns.index('Valor Efectivo')
-            except ValueError:
-                # Si las columnas no están, se salta la creación de filas de subtotal
-                continue 
-
+            cliente_col_idx = excel_columns.index('Cliente')
+            valor_col_idx = excel_columns.index('Valor Efectivo')
             subtotal_row[cliente_col_idx] = f'Subtotal Recibo N° {int(recibo_num)}'
             subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
@@ -282,13 +263,8 @@ def generate_excel_report(df):
             
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
-
-            try:
-                cliente_col_idx = excel_columns.index('Cliente')
-                valor_col_idx = excel_columns.index('Valor Efectivo')
-            except ValueError:
-                continue
-
+            cliente_col_idx = excel_columns.index('Cliente')
+            valor_col_idx = excel_columns.index('Valor Efectivo')
             subtotal_row[cliente_col_idx] = f'Subtotal Consignación Grupo {int(agrupacion_id)}'
             subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
@@ -316,18 +292,10 @@ def generate_excel_report(df):
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
-        # Obtener el índice de la columna 'Valor Efectivo'
-        try:
-            valor_col_letter = get_column_letter(excel_columns.index('Valor Efectivo') + 1)
-            cliente_col_idx = excel_columns.index('Cliente')
-        except ValueError:
-            # Si las columnas esenciales no están, no se aplica formato avanzado y se salva el archivo tal como está
-            return output.getvalue()
-
-
         # Aplicar estilo a las filas de datos y subtotales.
+        valor_col_letter = get_column_letter(excel_columns.index('Valor Efectivo') + 1)
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
-            is_subtotal_row = str(row[cliente_col_idx].value).startswith('Subtotal') if row[cliente_col_idx].value else False
+            is_subtotal_row = str(row[excel_columns.index('Cliente')].value).startswith('Subtotal')
             
             for cell in row:
                 cell.border = thin_border
@@ -379,7 +347,7 @@ def generate_excel_report(df):
                 except:
                     pass
             # Añadir un margen de 2 para mejor visualización, y asegurar un mínimo de 10.
-            adjusted_width = max(10, (max_length + 2))  
+            adjusted_width = max(10, (max_length + 2)) 
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
     return output.getvalue()
@@ -390,12 +358,7 @@ def get_next_series_consecutive(consecutivos_ws, series_name):
     try:
         cell = consecutivos_ws.find(f'Ultimo_Consecutivo_{series_name}')
         if cell:
-            # Asegurar que el valor es leído como string y es numérico antes de incrementar
-            current_value = consecutivos_ws.cell(cell.row, cell.col + 1).value
-            if current_value is None or not str(current_value).isdigit():
-                st.warning(f"El consecutivo actual para '{series_name}' no es un número válido. Usando 0.")
-                return 1
-            return int(current_value) + 1
+            return int(consecutivos_ws.cell(cell.row, cell.col + 1).value) + 1
         st.error(f"No se encontró la etiqueta para la serie '{series_name}'. Revisa la hoja 'Consecutivos'.")
         return None
     except Exception as e:
@@ -414,11 +377,7 @@ def update_series_consecutive(consecutivos_ws, series_name, new_consecutive):
 def get_next_global_consecutive(global_consecutivo_ws):
     """Obtiene el siguiente número consecutivo global."""
     try:
-        current_value = global_consecutivo_ws.acell('B1').value
-        if current_value is None or not str(current_value).isdigit():
-            st.warning("El consecutivo global no es un número válido. Usando 0.")
-            return 1
-        return int(current_value) + 1
+        return int(global_consecutivo_ws.acell('B1').value) + 1
     except Exception as e:
         st.error(f"Error obteniendo el consecutivo global: {e}")
         return None
@@ -458,7 +417,7 @@ def delete_existing_records(ws, global_consecutive_to_delete):
             st.error("La hoja 'RegistrosRecibos' no tiene la columna 'Consecutivo Global'. No se puede actualizar.")
             st.stop()
 
-        df_records['Consecutivo Global'] = df_records['Consecutivo Global'].astype(str).str.strip()
+        df_records['Consecutivo Global'] = df_records['Consecutivo Global'].astype(str)
         
         # Filtra por la lista de consecutivos a eliminar
         rows_to_delete_indices = df_records[
@@ -535,7 +494,7 @@ else:
                     with st.spinner("Buscando registros en Google Sheets..."):
                         all_values = registros_recibos_ws.get_all_values()
                         if len(all_values) > 1:
-                            headers = [h.strip() for h in all_values[0]] # Limpiar headers
+                            headers = all_values[0]
                             all_records_df = pd.DataFrame(all_values[1:], columns=headers)
                             
                             # Limpieza de datos
@@ -653,7 +612,7 @@ else:
                                 st.warning("No hay registros en la hoja para buscar.")
                                 st.session_state.found_groups = pd.DataFrame()
                             else:
-                                headers = [h.strip() for h in all_values[0]] # Limpiar headers
+                                headers = all_values[0]
                                 all_records_df = pd.DataFrame(all_values[1:], columns=headers)
                                 all_records_df = all_records_df.drop(columns=[''], errors='ignore')
                                 
@@ -684,17 +643,18 @@ else:
                                     # Guardar el detalle completo (esto es lo que se re-guardará)
                                     st.session_state.df_full_detail = filtered_df.copy()
                                     
-                                    # Agrupar por 'Recibo N°' y SUMAR todas las líneas de detalle/factura
-                                    # para obtener el valor total del recibo (esto corrige la percepción de doble suma
-                                    # ya que la tabla de edición SIEMPRE debe mostrar el total del recibo).
+                                    # --- CORRECCIÓN CLAVE: Usar 'sum' para Valor Efectivo ---
+                                    # Se agrupa por 'Recibo N°' y se SUMAN todos los valores de las líneas/facturas
+                                    # asociadas a ese recibo, que es su valor total.
                                     df_summary_edit = filtered_df.groupby('Recibo N°').agg(
                                         Fecha=('Fecha', 'first'),
                                         Cliente=('Cliente', 'first'),
-                                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'),
+                                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'), # <--- CORRECCIÓN CLAVE: Usar 'sum'
                                         Agrupación=('Agrupación', 'first'),
                                         Destino=('Destino', 'first')
                                     ).reset_index()
-                                    
+                                    # --- FIN CORRECCIÓN ---
+
                                     df_summary_edit.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
                                     st.session_state.df_for_display = df_summary_edit[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
                                     
@@ -922,7 +882,7 @@ else:
                         registros_data_df['Fecha Procesado'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
                         # Mapear columnas del DataFrame a las columnas de Google Sheets.
-                        gsheet_headers = [h.strip() for h in registros_recibos_ws.row_values(1)]
+                        gsheet_headers = registros_recibos_ws.row_values(1)
                         registros_to_append_df = pd.DataFrame(columns=gsheet_headers)
 
                         # Mapear columnas del DataFrame a las columnas de Google Sheets.
