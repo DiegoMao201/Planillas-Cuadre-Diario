@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from itertools import groupby
 from operator import itemgetter
 import time
+import re # Se importa re para usar en la normalización de columnas
 
 # Importaciones para la generación y estilo del Excel
 import openpyxl
@@ -95,6 +96,18 @@ def get_app_config(config_ws):
         st.error(f"Error al cargar la configuración de bancos y terceros: {e}")
         return [], [], {}, []
 
+# Función para normalizar nombres de columnas a un formato uniforme (ej. 'Serie_Factura' a 'SERIE_FACTURA')
+def normalize_column_names(df):
+    """Normaliza los nombres de las columnas a un formato consistente (MAYÚSCULAS)."""
+    # Expresión regular para quitar caracteres no alfanuméricos y reemplazar espacios/guiones por guion bajo.
+    def clean_name(name):
+        name = str(name).strip().upper()
+        name = re.sub(r'[^A-Z0-9_]', '', name.replace(' ', '_').replace('-', '_'))
+        return name
+        
+    df.columns = [clean_name(col) for col in df.columns]
+    return df
+
 # --- LÓGICA DE PROCESAMIENTO Y GENERACIÓN DE ARCHIVOS ---
 def generate_txt_content(df, account_mappings, tarjetas_destinos):
     """
@@ -108,11 +121,21 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
     if df.empty:
         return ""
 
+    # Asegurarse de que las columnas de facturas tengan el formato de mayúsculas esperado (SERIE_FACTURA, NUMERO_FACTURA)
+    # y que 'Valor Efectivo' sea numérico.
+    df['Valor Efectivo'] = pd.to_numeric(df['Valor Efectivo'], errors='coerce').fillna(0)
+    df = df.rename(columns={'Serie_Factura': 'SERIE_FACTURA', 'Numero_Factura': 'NUMERO_FACTURA'}, errors='ignore')
+    
     # Agrupa por el consecutivo global para procesar cada lote (diario) por separado.
     # Se usa sort=False para evitar reordenar si el DataFrame ya viene ordenado lógicamente.
     for global_consecutive, group_df in df.groupby('Consecutivo Global', sort=False):
         # Extrae datos comunes del lote.
-        series_consecutive = group_df['Consecutivo Serie'].iloc[0]
+        # Asegurarse que sean enteros para el TXT
+        try:
+            series_consecutive = int(group_df['Consecutivo Serie'].iloc[0])
+        except:
+            series_consecutive = 0
+            
         series = group_df['Serie'].iloc[0]
         series_numeric = ''.join(filter(str.isdigit, str(series)))
 
@@ -134,7 +157,11 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
                 except:
                     fecha = str(row['Fecha']) # En caso de error, usa la cadena original.
                     
-                num_recibo = str(int(row['Recibo N°']))
+                try:
+                    num_recibo = str(int(row['Recibo N°']))
+                except:
+                    num_recibo = str(row['Recibo N°'])
+                    
                 valor = float(row['Valor_Total'])
                 destino = str(row['Destino'])
                 
@@ -149,7 +176,7 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
                     nombre_tercero = destino_info['nombre']
 
                     linea_debito = "|".join([
-                        fecha, str(global_consecutive), cuenta_destino, tipo_documento,
+                        fecha, str(int(global_consecutive)), cuenta_destino, tipo_documento,
                         f"Recibo de Caja {num_recibo} - {row['Cliente']}",
                         serie_final_txt,
                         str(series_consecutive),
@@ -191,7 +218,7 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
                     descripcion_grupo = f"Consolidado Recibos {recibos}"
 
                     linea_debito = "|".join([
-                        fecha, str(global_consecutive), cuenta_destino, tipo_documento,
+                        fecha, str(int(global_consecutive)), cuenta_destino, tipo_documento,
                         descripcion_grupo,
                         serie_final_txt,
                         str(series_consecutive),
@@ -211,7 +238,7 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
             comentario_credito = f"Cierre Contable Fecha {fecha_cierre}"
 
             linea_credito_por_fecha = "|".join([
-                fecha_cierre, str(global_consecutive), cuenta_recibo_caja, tipo_documento,
+                fecha_cierre, str(int(global_consecutive)), cuenta_recibo_caja, tipo_documento,
                 comentario_credito,
                 str(series_numeric), 
                 str(series_consecutive),
@@ -237,6 +264,7 @@ def generate_excel_report(df):
     df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt'], inplace=True)
     
     # Reordenar las columnas para una presentación lógica en Excel.
+    # Se añade 'Serie-Número' que se debe crear antes de llamar a esta función.
     preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
     excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
     df = df[excel_columns]
@@ -247,7 +275,9 @@ def generate_excel_report(df):
     # Formatear la fecha a string para una correcta visualización en Excel.
     df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce').dt.strftime('%d/%m/%Y')
     df = df.drop(columns=['Fecha_dt'], errors='ignore')
-    excel_columns.remove('Fecha') # Quitar la original para que la nueva ocupe su lugar
+    # La lista excel_columns debe reflejar los cambios en el DataFrame.
+    if 'Fecha' in excel_columns:
+        excel_columns.remove('Fecha')
     excel_columns.insert(0, 'Fecha') # Poner la columna formateada al inicio
 
     # Separar datos en individuales y grupos de consignación.
@@ -284,8 +314,13 @@ def generate_excel_report(df):
             subtotal_row[valor_col_idx] = subtotal
             report_data.append(subtotal_row)
     
+    # Crear el DataFrame para el reporte, usando la lista de columnas final.
     report_df = pd.DataFrame(report_data, columns=excel_columns) if report_data else pd.DataFrame(columns=excel_columns)
     
+    # Asegurarse de que 'Valor Efectivo' sea float para el formato.
+    if 'Valor Efectivo' in report_df.columns:
+        report_df['Valor Efectivo'] = pd.to_numeric(report_df['Valor Efectivo'], errors='coerce')
+        
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         report_df.to_excel(writer, index=False, sheet_name='Recibos de Caja')
         workbook = writer.book
@@ -308,10 +343,14 @@ def generate_excel_report(df):
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
         # Aplicar estilo a las filas de datos y subtotales.
-        valor_col_letter = get_column_letter(excel_columns.index('Valor Efectivo') + 1)
+        if 'Valor Efectivo' in excel_columns:
+            valor_col_letter = get_column_letter(excel_columns.index('Valor Efectivo') + 1)
+        else:
+            valor_col_letter = 'E' # Valor por defecto si no se encuentra
+            
         for row_idx, row in enumerate(worksheet.iter_rows(min_row=2, max_row=worksheet.max_row), start=2):
             is_subtotal_row = False
-            cliente_cell_value = str(row[excel_columns.index('Cliente')].value) if row[excel_columns.index('Cliente')].value is not None else ''
+            cliente_cell_value = str(row[excel_columns.index('Cliente')].value) if 'Cliente' in excel_columns and row[excel_columns.index('Cliente')].value is not None else ''
             if cliente_cell_value.startswith('Subtotal'):
                 is_subtotal_row = True
             
@@ -322,9 +361,10 @@ def generate_excel_report(df):
                     cell.fill = subtotal_fill
             
             # Formatear y alinear celdas numéricas y de texto.
-            valor_cell = worksheet[f'{valor_col_letter}{row_idx}']
-            if isinstance(valor_cell.value, (int, float)):
-                valor_cell.number_format = currency_format
+            if 'Valor Efectivo' in excel_columns:
+                valor_cell = worksheet[f'{valor_col_letter}{row_idx}']
+                if isinstance(valor_cell.value, (int, float)):
+                    valor_cell.number_format = currency_format
 
             for col_name, align in [('Recibo N°', 'center'), ('Valor Efectivo', 'right'), ('Agrupación', 'center'), ('Serie-Número', 'center')]:
                 if col_name in excel_columns:
@@ -336,30 +376,31 @@ def generate_excel_report(df):
         total_row_idx = worksheet.max_row + 1
         
         # Buscamos los índices de columna para 'Cliente' y 'Valor Efectivo'
-        cliente_col_idx = excel_columns.index('Cliente') + 1
-        valor_col_idx = excel_columns.index('Valor Efectivo') + 1
-        
-        worksheet.cell(row=total_row_idx, column=cliente_col_idx, value='TOTAL GENERAL')
-        total_valor_cell = worksheet.cell(row=total_row_idx, column=valor_col_idx, value=grand_total)
-        
-        for cell in worksheet[total_row_idx]:
-            cell.font = total_font
-            cell.fill = total_fill
-            cell.border = thin_border
-        
-        total_valor_cell.number_format = currency_format
-        total_valor_cell.alignment = Alignment(horizontal='right')
+        if 'Cliente' in excel_columns and 'Valor Efectivo' in excel_columns:
+            cliente_col_idx = excel_columns.index('Cliente') + 1
+            valor_col_idx = excel_columns.index('Valor Efectivo') + 1
+            
+            worksheet.cell(row=total_row_idx, column=cliente_col_idx, value='TOTAL GENERAL')
+            total_valor_cell = worksheet.cell(row=total_row_idx, column=valor_col_idx, value=grand_total)
+            
+            for cell in worksheet[total_row_idx]:
+                cell.font = total_font
+                cell.fill = total_fill
+                cell.border = thin_border
+            
+            total_valor_cell.number_format = currency_format
+            total_valor_cell.alignment = Alignment(horizontal='right')
 
         # --- Ajustar el ancho de las columnas ---
         for col_idx, column_cells in enumerate(worksheet.columns, 1):
             max_length = 0
             column_letter = get_column_letter(col_idx)
-            for cell in column_cells:
+            for i, cell in enumerate(column_cells):
                 try:
-                    # Usar la longitud de la celda de cabecera como mínimo si es muy corta
                     current_length = len(str(cell.value))
-                    if row_idx == 1:
-                         current_length = max(len(column_cells[0].value), current_length)
+                    # Usar la longitud de la celda de cabecera como mínimo si es muy corta
+                    if i == 0:
+                         current_length = max(len(str(column_cells[0].value)), current_length)
                          
                     if current_length > max_length:
                         max_length = current_length
@@ -422,7 +463,11 @@ def delete_existing_records(ws, global_consecutives_to_delete):
             st.warning("No hay consecutivos globales especificados para borrar.")
             return
         
-        consecutives_str = [str(c) for c in global_consecutives_to_delete]
+        consecutives_str = [str(int(c)) for c in global_consecutives_to_delete if pd.notna(c)] # Asegura que sean strings de enteros no nulos
+        if not consecutives_str:
+            st.warning("No hay consecutivos globales válidos especificados para borrar.")
+            return
+
         st.info(f"Buscando registros antiguos con consecutivos globales: {', '.join(consecutives_str)} para eliminarlos...")
         
         # Obtener todos los valores.
@@ -495,7 +540,7 @@ else:
         st.session_state.df_full_detail = pd.DataFrame() # DataFrame completo del detalle de facturas
         st.session_state.df_for_display = pd.DataFrame() # DataFrame resumido para la tabla de edición
 
-    # --- SECCIÓN DE DESCARGA DE REPORTES ANTERIORES ---
+    # --- SECCIÓN DE DESCARGA DE REPORTES ANTERIORES (Corrección aplicada aquí) ---
     st.divider()
     with st.expander("📥 Descargar Reportes Anteriores", expanded=False):
         st.info("Busca todos los grupos dentro de un rango de fechas y serie para generar y descargar un **reporte consolidado**.")
@@ -519,9 +564,15 @@ else:
                             headers = all_values[0]
                             all_records_df = pd.DataFrame(all_values[1:], columns=headers)
                             
+                            # --- Inicio de la Normalización y Filtrado para Descarga ---
+                            
+                            # 1. Normalizar los encabezados del DF de GSheets (solo si es necesario, pero ayuda a la consistencia)
+                            # all_records_df = normalize_column_names(all_records_df.copy()) # Se omite para no alterar la estructura interna que espera tu código.
+                            
                             # Limpieza de datos
                             all_records_df = all_records_df.drop(columns=[''], errors='ignore')
-                            # Aseguramos que la columna 'Fecha' sea string para el formato
+                            
+                            # Aseguramos que la columna 'Fecha' sea string para el formato 'DD/MM/AAAA'
                             all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                             all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
 
@@ -531,9 +582,24 @@ else:
                                 (all_records_df['Fecha_dt'].dt.date <= end_date) &
                                 (all_records_df['Serie'] == download_serie)
                             ].copy()
-
-                            # Asegurar que 'Valor Efectivo' sea numérico para sumar
-                            filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce').fillna(0)
+                            
+                            # Asegurar columnas numéricas
+                            for col in ['Valor Efectivo', 'Agrupación', 'Recibo N°', 'Consecutivo Global', 'Consecutivo Serie']:
+                                filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce').fillna(0)
+                            
+                            # Asegurar el formato de fecha (string 'DD/MM/AAAA') y la existencia de las columnas de factura.
+                            filtered_df['Fecha'] = filtered_df['Fecha_dt'].dt.strftime('%d/%m/%Y')
+                            
+                            # Rellenar con cadenas vacías si no existen (para evitar errores en el TXT/Excel)
+                            if 'Serie_Factura' not in filtered_df.columns:
+                                filtered_df['Serie_Factura'] = ''
+                            if 'Numero_Factura' not in filtered_df.columns:
+                                filtered_df['Numero_Factura'] = ''
+                            
+                            # Renombrar/Asegurar el nombre que espera generate_txt_content/generate_excel_report para las facturas (si fuera necesario)
+                            filtered_df.rename(columns={'Serie_Factura': 'SERIE_FACTURA', 'Numero_Factura': 'NUMERO_FACTURA'}, inplace=True)
+                            
+                            # --- Fin de la Normalización y Filtrado para Descarga ---
 
                             if not filtered_df.empty:
                                 st.session_state.df_for_consolidated_download = filtered_df
@@ -550,15 +616,17 @@ else:
         if 'df_for_consolidated_download' in st.session_state and not st.session_state.df_for_consolidated_download.empty:
             df_for_download = st.session_state.df_for_consolidated_download.copy()
             
-            # Asegurar tipos de datos correctos para las funciones de generación.
-            for col in ['Valor Efectivo', 'Agrupación', 'Recibo N°']:
-                df_for_download[col] = pd.to_numeric(df_for_download[col], errors='coerce')
-            df_for_download.dropna(subset=['Valor Efectivo', 'Agrupación', 'Recibo N°'], inplace=True)
-            
-            # Crear columna 'Serie-Número' para el reporte.
-            s_factura = df_for_download['Serie_Factura'].fillna('S/D').astype(str)
-            n_factura = df_for_download['Numero_Factura'].fillna('S/D').astype(str)
+            # --- Corrección: Se asegura la creación de la columna 'Serie-Número' antes de llamar a generate_excel_report. ---
+            # La columna debe estar en el formato que se creó arriba, pero se repite aquí por seguridad
+            if 'SERIE_FACTURA' not in df_for_download.columns:
+                 df_for_download['SERIE_FACTURA'] = df_for_download['Serie_Factura'].fillna('S/D') # Usa el nombre original si existe
+            if 'NUMERO_FACTURA' not in df_for_download.columns:
+                 df_for_download['NUMERO_FACTURA'] = df_for_download['Numero_Factura'].fillna('S/D') # Usa el nombre original si existe
+                 
+            s_factura = df_for_download['SERIE_FACTURA'].fillna('S/D').astype(str)
+            n_factura = df_for_download['NUMERO_FACTURA'].fillna('S/D').astype(str)
             df_for_download['Serie-Número'] = s_factura + "-" + n_factura
+            # -------------------------------------------------------------------------------------------------------------------
 
             # Generar archivos consolidados.
             txt_content_dl = generate_txt_content(df_for_download, account_mappings, tarjetas_destinos)
@@ -650,12 +718,12 @@ else:
                                 ].copy()
                                 
                                 # Asegurar columnas numéricas para el detalle
-                                for col in ['Valor Efectivo', 'Agrupación', 'Consecutivo Global', 'Consecutivo Serie']:
+                                for col in ['Valor Efectivo', 'Agrupación', 'Consecutivo Global', 'Consecutivo Serie', 'Recibo N°']:
                                     filtered_df[col] = pd.to_numeric(filtered_df[col], errors='coerce')
 
                                 if not filtered_df.empty:
                                     # Guardar el detalle completo (Múltiples líneas por recibo si es el caso)
-                                    # Renombrar para consistencia con el flujo de 'nuevo archivo'
+                                    # Renombrar para consistencia con el flujo de 'nuevo archivo' (MAYÚSCULAS)
                                     filtered_df.rename(columns={
                                         'Serie_Factura': 'SERIE_FACTURA',
                                         'Numero_Factura': 'NUMERO_FACTURA'
@@ -717,13 +785,13 @@ else:
                 try:
                     # Lee el archivo, quitando la última fila que suele ser un total.
                     df = pd.read_excel(uploaded_file, header=0).iloc[:-1]
-                    # Normaliza nombres de columna
+                    # Normaliza nombres de columna para una manipulación interna uniforme (MAYÚSCULAS)
                     df.columns = df.columns.astype(str).str.strip().str.upper().str.normalize('NFKD').str.encode('ascii', errors='ignore').str.decode('utf-8')
                     
                     column_mapping = {
                         'NUMRECIBO': ['NUMRECIBO', 'RECIBO'], 'NOMBRECLIENTE': ['NOMBRECLIENTE', 'CLIENTE'],
                         'FECHA_RECIBO': ['FECHA_RECIBO', 'FECHA'], 'IMPORTE': ['IMPORTE', 'VALOR'],
-                        'NUMERO_FACTURA': ['NUMERO'], 'SERIE_FACTURA': ['SERIE']
+                        'NUMERO_FACTURA': ['NUMERO', 'NUMERO_FACTURA'], 'SERIE_FACTURA': ['SERIE', 'SERIE_FACTURA']
                     }
                     # Busca columnas existentes basadas en el mapeo
                     found_columns = {name: std_name for std_name, names in column_mapping.items() for name in names if name in df.columns}
@@ -733,7 +801,8 @@ else:
                     df_cleaned = df.dropna(subset=['IMPORTE']).copy()
                     # Rellenar valores nulos de recibo, fecha y cliente con el valor anterior
                     for col in ['NUMRECIBO', 'FECHA_RECIBO', 'NOMBRECLIENTE']:
-                        df_cleaned[col] = df_cleaned[col].ffill()
+                        if col in df_cleaned.columns:
+                            df_cleaned[col] = df_cleaned[col].ffill()
                     
                     # Limpieza del valor de importe (quitando $ y usando punto como decimal)
                     df_cleaned['IMPORTE_LIMPIO'] = df_cleaned['IMPORTE'].apply(
@@ -757,6 +826,12 @@ else:
                         except:
                             pass
                     
+                    # Asegurarse de que las columnas de factura existan (para el merge posterior)
+                    if 'SERIE_FACTURA' not in df_full_detail.columns:
+                        df_full_detail['SERIE_FACTURA'] = ''
+                    if 'NUMERO_FACTURA' not in df_full_detail.columns:
+                        df_full_detail['NUMERO_FACTURA'] = ''
+                        
                     st.session_state.df_full_detail = df_full_detail.copy()
 
                     # Crea el DataFrame resumido para la edición (un fila por recibo N°)
@@ -831,7 +906,12 @@ else:
                         serie_seleccionada = st.session_state.editing_info['serie']
                         
                         # --- Lógica Común: Fusionar el resumen editado con el detalle completo ---
-                        df_to_update = st.session_state.df_full_detail.drop(columns=['Agrupación', 'Destino', 'Serie'], errors='ignore')
+                        # Se mantiene 'Consecutivo Global' y 'Consecutivo Serie' si venían de la edición.
+                        cols_to_drop = ['Agrupación', 'Destino', 'Serie']
+                        if st.session_state.mode == 'new':
+                            cols_to_drop.extend(['Consecutivo Global', 'Consecutivo Serie'])
+                            
+                        df_to_update = st.session_state.df_full_detail.drop(columns=cols_to_drop, errors='ignore')
                         
                         # Fusionar los nuevos campos de 'Agrupación' y 'Destino'
                         df_full_detail_merged = pd.merge(
@@ -896,6 +976,9 @@ else:
                         # Preparar datos para guardar en Google Sheets.
                         registros_data_df = final_df_to_process.copy()
                         registros_data_df['Fecha Procesado'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        
+                        # Normalizar el nombre de las columnas de factura para que coincidan con GSheets
+                        registros_data_df.rename(columns={'SERIE_FACTURA': 'Serie_Factura', 'NUMERO_FACTURA': 'Numero_Factura'}, inplace=True)
 
                         # Asegurarse de que todas las columnas esperadas por gspread estén en el DataFrame
                         gsheet_headers = registros_recibos_ws.row_values(1)
@@ -903,10 +986,9 @@ else:
                         registros_to_append_df = pd.DataFrame(columns=gsheet_headers)
 
                         # Mapear columnas del DataFrame a las columnas de Google Sheets.
-                        # Nombres en tu DataFrame -> Nombres en Google Sheets
                         col_map = {
-                            'SERIE_FACTURA': 'Serie_Factura',
-                            'NUMERO_FACTURA': 'Numero_Factura',
+                            'Serie_Factura': 'Serie_Factura',
+                            'Numero_Factura': 'Numero_Factura',
                             'Fecha Procesado': 'Fecha Procesado',
                             'Fecha': 'Fecha',
                             'Recibo N°': 'Recibo N°',
