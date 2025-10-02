@@ -108,6 +108,9 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
         return ""
 
     # Agrupa por el consecutivo global para procesar cada lote (diario) por separado.
+    # Se asegura que el Consecutivo Global sea string para la agrupación.
+    df['Consecutivo Global'] = df['Consecutivo Global'].astype(str)
+
     for global_consecutive, group_df in df.groupby('Consecutivo Global'):
         # Extrae datos comunes del lote.
         series_consecutive = group_df['Consecutivo Serie'].iloc[0]
@@ -212,19 +215,19 @@ def generate_excel_report(df):
     # Asegurar que las columnas numéricas y de fecha tengan el tipo correcto.
     df['Recibo N°'] = pd.to_numeric(df['Recibo N°'], errors='coerce')
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
-    df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True)
-    df.dropna(subset=['Recibo N°', 'Agrupación'], inplace=True)
+    # Convertir a datetime antes de ordenar para evitar problemas de formato de texto.
+    df['Fecha_dt'] = pd.to_datetime(df['Fecha'], format='%d/%m/%Y', errors='coerce') 
+    df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt'], inplace=True)
     
     # Reordenar las columnas para una presentación lógica en Excel.
     preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
-    excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order]
+    excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
     df = df[excel_columns]
     
     # Ordenar por fecha primero, luego por agrupación y recibo.
-    df.sort_values(by=['Fecha', 'Agrupación', 'Recibo N°'], inplace=True)
+    df.sort_values(by=['Fecha_dt', 'Agrupación', 'Recibo N°'], inplace=True, key=lambda x: x.map(lambda d: pd.to_datetime(d, format='%d/%m/%Y', errors='coerce')) if x.name == 'Fecha' else x)
     
-    # Formatear la fecha a string para una correcta visualización en Excel.
-    df['Fecha'] = df['Fecha'].dt.strftime('%d/%m/%Y')
+    # La columna 'Fecha' ya está como string '%d/%m/%Y' desde la carga o edición.
 
     # Separar datos en individuales y grupos de consignación.
     df_individual = df[df['Agrupación'] == 1].copy()
@@ -234,7 +237,9 @@ def generate_excel_report(df):
 
     # Procesar recibos individuales con subtotales.
     if not df_individual.empty:
-        for recibo_num, group in df_individual.groupby('Recibo N°', sort=False):
+        # Volvemos a agrupar por fecha y recibo para garantizar el orden de los subtotales si hay múltiples días
+        grouped_by_recibo = df_individual.groupby('Recibo N°', sort=False)
+        for recibo_num, group in grouped_by_recibo:
             for _, row in group.iterrows():
                 report_data.append(row.tolist())
             
@@ -248,7 +253,9 @@ def generate_excel_report(df):
 
     # Procesar consignaciones agrupadas con subtotales.
     if not df_grouped.empty:
-        for agrupacion_id, group in df_grouped.groupby('Agrupación', sort=False):
+        # Agrupar por Agrupación y luego por Fecha para mantener el orden.
+        grouped_by_agrupacion = df_grouped.groupby('Agrupación', sort=False)
+        for agrupacion_id, group in grouped_by_agrupacion:
             for _, row in group.iterrows():
                 report_data.append(row.tolist())
             
@@ -385,10 +392,17 @@ def delete_existing_records(ws, global_consecutive_to_delete):
     """
     Encuentra y borra todas las filas que coincidan con un consecutivo global
     utilizando una solicitud por lotes (batch) para evitar errores de cuota.
+    
+    Acepta una lista de consecutivos globales a eliminar.
     """
+    if not isinstance(global_consecutive_to_delete, list):
+        global_consecutive_to_delete = [global_consecutive_to_delete]
+        
+    global_consecutive_to_delete_str = [str(g) for g in global_consecutive_to_delete]
+    
     try:
-        st.info(f"Buscando registros antiguos con el consecutivo global {global_consecutive_to_delete} para eliminarlos...")
-        all_records = ws.get_all_values() # Usar get_all_values para obtener todos los datos más rápido.
+        st.info(f"Buscando registros antiguos con los consecutivos globales {', '.join(global_consecutive_to_delete_str)} para eliminarlos...")
+        all_records = ws.get_all_values() 
         
         if len(all_records) <= 1:
             st.warning("No hay registros en la hoja para buscar. Se procederá a guardar como si fueran nuevos.")
@@ -402,8 +416,11 @@ def delete_existing_records(ws, global_consecutive_to_delete):
             st.stop()
 
         df_records['Consecutivo Global'] = df_records['Consecutivo Global'].astype(str)
-        # Los índices de pandas son base 0, la fila 0 es la cabecera, por eso sumamos 2 (1 por la cabecera y 1 por base 1 de gspread).
-        rows_to_delete_indices = df_records[df_records['Consecutivo Global'] == str(global_consecutive_to_delete)].index.tolist()
+        
+        # Filtra por la lista de consecutivos a eliminar
+        rows_to_delete_indices = df_records[
+            df_records['Consecutivo Global'].isin(global_consecutive_to_delete_str)
+        ].index.tolist()
         
         if not rows_to_delete_indices:
             st.warning("No se encontraron registros antiguos que coincidieran. Se procederá a guardar como si fueran nuevos.")
@@ -461,9 +478,9 @@ else:
         
         dl_col1, dl_col2, dl_col3 = st.columns(3)
         with dl_col1:
-            start_date = st.date_input("Fecha de inicio:", datetime.now(), key="dl_start_date")
+            start_date = st.date_input("Fecha de inicio:", datetime.now().date(), key="dl_start_date")
         with dl_col2:
-            end_date = st.date_input("Fecha de fin:", datetime.now(), key="dl_end_date")
+            end_date = st.date_input("Fecha de fin:", datetime.now().date(), key="dl_end_date")
         with dl_col3:
             download_serie = st.selectbox("Serie a buscar:", options=series_disponibles, key="dl_serie")
         
@@ -480,11 +497,10 @@ else:
                             
                             # Limpieza de datos
                             all_records_df = all_records_df.drop(columns=[''], errors='ignore')
-                            # Aseguramos que la columna 'Fecha' sea string para el formato
                             all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                             all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
 
-                            # Filtrar por rango de fechas y serie. Se usa <= en el final para ser inclusivo.
+                            # Filtrar por rango de fechas y serie. Se usa .dt.date para comparar solo la fecha.
                             filtered_df = all_records_df[
                                 (all_records_df['Fecha_dt'].dt.date >= start_date) &
                                 (all_records_df['Fecha_dt'].dt.date <= end_date) &
@@ -561,112 +577,87 @@ else:
             
     # --- MODO EDICIÓN: BUSCAR Y CARGAR GRUPO ---
     if st.session_state.mode == 'edit':
-        st.subheader("2. Buscar y Cargar Grupo para Edición")
-        st.info("Busca un grupo de recibos que ya hayas procesado para cargarlo y modificarlo.")
+        st.subheader("2. Buscar y Cargar Grupos para Edición (Rango de Fechas)")
+        st.info("Busca todos los recibos dentro del rango de fechas y los carga para edición en una sola tabla.")
         
         with st.container(border=True):
             search_col1, search_col2, search_col3 = st.columns(3)
             with search_col1:
-                search_start_date = st.date_input("Fecha de inicio:", datetime.now(), key="edit_start_date")
+                search_start_date = st.date_input("Fecha de inicio:", datetime.now().date(), key="edit_start_date_range")
             with search_col2:
-                search_end_date = st.date_input("Fecha de fin:", datetime.now(), key="edit_end_date")
+                search_end_date = st.date_input("Fecha de fin:", datetime.now().date(), key="edit_end_date_range")
             with search_col3:
-                search_serie = st.selectbox("Serie de los recibos:", options=series_disponibles, key="search_serie")
+                search_serie = st.selectbox("Serie de los recibos:", options=series_disponibles, key="search_serie_range")
             
-            if st.button("Buscar Grupos para Editar", use_container_width=True):
+            # --- Lógica Modificada para Cargar Múltiples Días ---
+            if st.button("Cargar Grupos en Rango de Fechas", use_container_width=True, type="primary"):
                 if search_end_date < search_start_date:
                     st.error("Error: La fecha de fin no puede ser anterior a la fecha de inicio.")
+                    # Limpia el estado para evitar cargar datos erróneos
+                    if 'df_for_display' in st.session_state: del st.session_state.df_for_display
+                    if 'editing_info' in st.session_state: del st.session_state.editing_info
                 else:
                     try:
-                        with st.spinner("Buscando, por favor espera..."):
+                        with st.spinner("Buscando y consolidando registros de múltiples días, por favor espera..."):
                             all_values = registros_recibos_ws.get_all_values()
                             
                             if len(all_values) < 2:
                                 st.warning("No hay registros en la hoja para buscar.")
+                                st.session_state.found_groups = pd.DataFrame()
                             else:
                                 headers = all_values[0]
                                 all_records_df = pd.DataFrame(all_values[1:], columns=headers)
                                 all_records_df = all_records_df.drop(columns=[''], errors='ignore')
                                 
                                 # Convertir fecha para poder comparar rangos
-                                # Usamos errors='coerce' para que las fechas inválidas se conviertan a NaT y se puedan eliminar.
                                 all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                                 all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
 
-                                # CORRECCIÓN CLAVE: Filtrar para encontrar grupos que tengan registros en el rango de fechas y serie buscadas.
-                                # Se usa .dt.date para comparar solo la parte de la fecha, ignorando la hora, haciendo el filtro inclusivo.
+                                # Filtrar para encontrar todos los registros en el rango.
                                 filtered_df = all_records_df[
                                     (all_records_df['Fecha_dt'].dt.date >= search_start_date) & 
                                     (all_records_df['Fecha_dt'].dt.date <= search_end_date) &
                                     (all_records_df['Serie'] == search_serie)
-                                ]
+                                ].copy()
                                 
-                                if not filtered_df.empty:
-                                    # Agrupar por consecutivo para mostrar un resumen al usuario.
-                                    st.session_state.found_groups = filtered_df.groupby('Consecutivo Global').agg(
-                                        Recibos=('Recibo N°', lambda x: f"{pd.to_numeric(x, errors='coerce').min()}-{pd.to_numeric(x, errors='coerce').max()}"),
-                                        Total=('Valor Efectivo', lambda x: pd.to_numeric(x, errors='coerce').sum())
-                                    ).reset_index()
-                                    # Guarda el DataFrame completo para usarlo después de la selección.
-                                    st.session_state.full_search_results = all_records_df
+                                if filtered_df.empty:
+                                    st.warning(f"No se encontraron recibos para la serie {search_serie} entre {search_start_date} y {search_end_date}.")
+                                    if 'df_for_display' in st.session_state: del st.session_state.df_for_display
+                                    if 'editing_info' in st.session_state: del st.session_state.editing_info
                                 else:
-                                    st.session_state.found_groups = pd.DataFrame()
-                                    st.warning("No se encontraron grupos para ese rango de fechas y serie.")
+                                    # Obtener la lista de TODOS los Consecutivos Globales encontrados
+                                    global_consecutives_to_load = filtered_df['Consecutivo Global'].unique().tolist()
+                                    
+                                    # Preparar el DataFrame para la edición. Mantenemos solo un registro por Recibo N° con la suma total.
+                                    filtered_df['Valor Efectivo'] = pd.to_numeric(filtered_df['Valor Efectivo'], errors='coerce')
+                                    filtered_df['Agrupación'] = pd.to_numeric(filtered_df['Agrupación'], errors='coerce')
+
+                                    # Guardar el detalle completo (esto es lo que se re-guardará)
+                                    st.session_state.df_full_detail = filtered_df.copy()
+                                    
+                                    df_summary_edit = filtered_df.groupby('Recibo N°').agg(
+                                        Fecha=('Fecha', 'first'),
+                                        Cliente=('Cliente', 'first'),
+                                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'),
+                                        Agrupación=('Agrupación', 'first'),
+                                        Destino=('Destino', 'first')
+                                    ).reset_index()
+                                    df_summary_edit.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
+                                    st.session_state.df_for_display = df_summary_edit[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
+                                    
+                                    # Guardar los consecutivos para la fase de guardado y eliminación.
+                                    st.session_state.editing_info = {
+                                        'global_consecutives_to_delete': global_consecutives_to_load,
+                                        'series_consecutive': filtered_df['Consecutivo Serie'].iloc[0], # Se toma el primero, se asume que todos tienen el mismo si es edición de un lote.
+                                        'serie': search_serie
+                                    }
+                                    st.success(f"Cargados {len(st.session_state.df_for_display)} recibos de {len(global_consecutives_to_load)} lotes (Consecutivos Globales: {', '.join(map(str, global_consecutives_to_load))}).")
+                                    st.rerun()
+
                     except Exception as e:
                         st.error(f"Error al buscar registros: {e}")
-
-            if 'found_groups' in st.session_state and not st.session_state.found_groups.empty:
-                st.markdown("---")
-                st.subheader("Grupos Encontrados")
-                
-                group_options = {
-                    f"Global {row['Consecutivo Global']} (Recibos {row['Recibos']}, Total ${row['Total']:,.2f})": row['Consecutivo Global']
-                    for _, row in st.session_state.found_groups.iterrows()
-                }
-                
-                selected_group_display = st.selectbox(
-                    "Selecciona el grupo que deseas cargar para editar:",
-                    options=list(group_options.keys())
-                )
-
-                if st.button("Cargar Grupo Seleccionado", use_container_width=True, type="primary"):
-                    global_consecutive_to_load = group_options[selected_group_display]
-                    
-                    # Carga el grupo COMPLETO desde el DataFrame guardado, incluyendo todas las fechas.
-                    # Esto es correcto, ya que un grupo global puede tener varias fechas asociadas.
-                    group_data_df = st.session_state.full_search_results[
-                        st.session_state.full_search_results['Consecutivo Global'].astype(str) == str(global_consecutive_to_load)
-                    ].copy()
-
-                    for col in ['Valor Efectivo', 'Agrupación']:
-                        group_data_df[col] = pd.to_numeric(group_data_df[col], errors='coerce')
-                    
-                    # Renombrar columnas si es necesario para consistencia.
-                    group_data_df.rename(columns={
-                        'Serie_Factura': 'SERIE_FACTURA',
-                        'Numero_Factura': 'NUMERO_FACTURA'
-                    }, inplace=True)
-                    
-                    st.session_state.df_full_detail = group_data_df.copy()
-
-                    # Crear el resumen para la tabla de edición (se agrupa por Recibo N°).
-                    df_summary_edit = group_data_df.groupby('Recibo N°').agg(
-                        Fecha=('Fecha', 'first'),
-                        Cliente=('Cliente', 'first'),
-                        Valor_Efectivo_Total=('Valor Efectivo', 'sum'),
-                        Agrupación=('Agrupación', 'first'),
-                        Destino=('Destino', 'first')
-                    ).reset_index()
-                    df_summary_edit.rename(columns={'Valor_Efectivo_Total': 'Valor Efectivo'}, inplace=True)
-                    st.session_state.df_for_display = df_summary_edit[['Fecha', 'Recibo N°', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']]
-                    
-                    st.session_state.editing_info = {
-                        'global_consecutive': global_consecutive_to_load,
-                        'series_consecutive': group_data_df['Consecutivo Serie'].iloc[0],
-                        'serie': group_data_df['Serie'].iloc[0]
-                    }
-                    st.success(f"Grupo con Consecutivo Global {global_consecutive_to_load} cargado. Ahora puedes editarlo en la tabla de abajo.")
-                    st.rerun()
+                        if 'df_for_display' in st.session_state: del st.session_state.df_for_display
+                        if 'editing_info' in st.session_state: del st.session_state.editing_info
 
     # --- MODO NUEVO: CARGAR ARCHIVO EXCEL ---
     elif st.session_state.mode == 'new':
@@ -717,6 +708,12 @@ else:
                     if pd.api.types.is_datetime64_any_dtype(df_full_detail['Fecha']):
                         df_full_detail['Fecha'] = pd.to_datetime(df_full_detail['Fecha']).dt.strftime('%d/%m/%Y')
                     
+                    # CORRECCIÓN: Asegurar que las columnas de factura existan para el merge posterior
+                    if 'NUMERO_FACTURA' not in df_full_detail.columns:
+                        df_full_detail['NUMERO_FACTURA'] = ""
+                    if 'SERIE_FACTURA' not in df_full_detail.columns:
+                        df_full_detail['SERIE_FACTURA'] = ""
+                        
                     st.session_state.df_full_detail = df_full_detail.copy()
 
                     df_summary = df_full_detail.groupby('Recibo N°').agg(
@@ -743,6 +740,12 @@ else:
         st.header("3. Asigna Agrupación y Destinos")
         
         st.metric(label="💰 Total Efectivo del Grupo", value=f"${st.session_state.df_full_detail['Valor Efectivo'].sum():,.2f}")
+        
+        # Mostrar qué consecutivos globales se están editando
+        if st.session_state.mode == 'edit' and 'global_consecutives_to_delete' in st.session_state.editing_info:
+            consecutivos_str = ', '.join(map(str, st.session_state.editing_info['global_consecutives_to_delete']))
+            st.warning(f"⚠️ Estás editando los lotes diarios con **Consecutivos Globales**: **{consecutivos_str}**. Al guardar, estos se eliminarán y se volverán a guardar.")
+
 
         # Herramientas de asignación masiva.
         with st.expander("Herramientas de asignación masiva"):
@@ -792,6 +795,7 @@ else:
                             df_full_detail_merged = pd.merge(st.session_state.df_full_detail, edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']], on='Recibo N°', how='left')
                             
                             processed_daily_dfs = []
+                            # Se itera sobre las fechas únicas para asignar un Consecutivo Global y Consecutivo Serie por día.
                             for date_str in sorted(df_full_detail_merged['Fecha'].unique()):
                                 global_consecutive = get_next_global_consecutive(global_consecutivo_ws)
                                 series_consecutive = get_next_series_consecutive(consecutivos_ws, serie_seleccionada)
@@ -813,27 +817,32 @@ else:
 
                         elif st.session_state.mode == 'edit':
                             st.info("Procesando como una EDICIÓN de grupo existente...")
-                            global_consecutive = st.session_state.editing_info['global_consecutive']
-                            series_consecutive = st.session_state.editing_info['series_consecutive']
                             
-                            delete_existing_records(registros_recibos_ws, global_consecutive)
+                            # Obtener la lista de consecutivos a eliminar.
+                            global_consecutives_to_delete = st.session_state.editing_info['global_consecutives_to_delete']
+                            series_consecutive = st.session_state.editing_info['series_consecutive'] # Se reutiliza el consecutivo de la serie.
+                            
+                            # Eliminar todos los registros antiguos. Se pasa la lista.
+                            delete_existing_records(registros_recibos_ws, global_consecutives_to_delete)
 
-                            # --- FIX CLAVE (Ya estaba, solo se verifica): Asegura que el merge use las columnas correctas ---
-                            # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original para evitar conflictos en el merge.
+                            # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original
                             df_to_update = st.session_state.df_full_detail.drop(columns=['Agrupación', 'Destino'], errors='ignore')
                             
-                            # 2. Hacer el merge. Ahora las columnas 'Agrupación' y 'Destino' de `edited_summary_df` se añadirán limpiamente.
+                            # 2. Re-mergear con las nuevas agrupaciones/destinos de la tabla editada
                             df_full_detail_merged = pd.merge(
                                 df_to_update,
                                 edited_summary_df[['Recibo N°', 'Agrupación', 'Destino']],
                                 on='Recibo N°',
                                 how='left'
                             )
-                            # --- FIN DEL FIX ---
 
-                            df_full_detail_merged['Consecutivo Global'] = global_consecutive
-                            df_full_detail_merged['Consecutivo Serie'] = series_consecutive
-                            final_df_to_process = df_full_detail_merged
+                            # Reasignar los Consecutivos Globales y de Serie originales para que se guarden en las mismas transacciones diarias.
+                            final_df_to_process = df_full_detail_merged.copy()
+                            
+                            # El merge puede haber perdido las columnas originales, reasignarlas desde la copia completa.
+                            final_df_to_process['Consecutivo Global'] = st.session_state.df_full_detail['Consecutivo Global']
+                            final_df_to_process['Consecutivo Serie'] = series_consecutive # Se asume que el consecutivo de serie es el mismo para todo el lote editado.
+
 
                         # --- Generación de archivos y guardado (común para ambos modos) ---
                         
@@ -845,20 +854,17 @@ else:
 
                         # Preparar datos para guardar en Google Sheets.
                         registros_data_df = final_df_to_process.copy()
-                        # CORRECCIÓN: Usar el nombre de columna correcto 'Fecha_Procesado'.
-                        registros_data_df['Fecha_Procesado'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        registros_data_df['Fecha Procesado'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-                        # Asegurarse de que todas las columnas esperadas por gspread estén en el DataFrame
+                        # Mapear columnas del DataFrame a las columnas de Google Sheets.
                         gsheet_headers = registros_recibos_ws.row_values(1)
-                        # Creamos un nuevo DataFrame con las columnas de Google Sheets
                         registros_to_append_df = pd.DataFrame(columns=gsheet_headers)
 
                         # Mapear columnas del DataFrame a las columnas de Google Sheets.
-                        # Nombres en tu DataFrame -> Nombres en Google Sheets
                         col_map = {
                             'SERIE_FACTURA': 'Serie_Factura',
                             'NUMERO_FACTURA': 'Numero_Factura',
-                            'Fecha_Procesado': 'Fecha Procesado',
+                            'Fecha Procesado': 'Fecha Procesado',
                             'Fecha': 'Fecha',
                             'Recibo N°': 'Recibo N°',
                             'Cliente': 'Cliente',
@@ -870,14 +876,11 @@ else:
                             'Serie': 'Serie'
                         }
                         
-                        # Rellenar el DataFrame a guardar con los datos del DataFrame final
                         for df_col, gsheet_col in col_map.items():
                             if df_col in registros_data_df.columns and gsheet_col in gsheet_headers:
                                 registros_to_append_df[gsheet_col] = registros_data_df[df_col]
                         
-                        # Rellenar las columnas faltantes con cadena vacía.
                         registros_to_append_df = registros_to_append_df[gsheet_headers].fillna('')
-
                         registros_recibos_ws.append_rows(registros_to_append_df.values.tolist(), value_input_option='USER_ENTERED')
                         
                         st.success("✅ ¡Éxito! Los datos han sido guardados en Google Sheets.")
@@ -885,7 +888,7 @@ else:
                         st.subheader("5. Descargar Archivos")
                         dl_col1, dl_col2 = st.columns(2)
                         
-                        file_identifier = f"{serie_seleccionada}_{final_df_to_process['Consecutivo Global'].min()}_{datetime.now().strftime('%Y%m%d')}"
+                        file_identifier = f"{serie_seleccionada}_{final_df_to_process['Consecutivo Global'].min()}_to_{final_df_to_process['Consecutivo Global'].max()}_{datetime.now().strftime('%Y%m%d')}"
                         
                         with dl_col1:
                             st.download_button(
@@ -907,7 +910,7 @@ else:
                             if key not in ['mode', 'google_credentials']:
                                 del st.session_state[key]
                         
-                        st.info("El proceso ha finalizado. La página se recargará para iniciar un nuevo ciclo.")
+                        st.info("El proceso ha finalizado. La página se recargará para iniciar un nuevo nuevo ciclo.")
                         time.sleep(5)
                         st.rerun()
 
