@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.6 (Corregido)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.7 (Corregido)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
@@ -221,7 +221,7 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
 
     return "\n".join(txt_lines)
 
-# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL ---
+# --- FUNCIÓN PARA GENERAR REPORTE EXCEL PROFESIONAL (CORREGIDA) ---
 def generate_excel_report(df):
     """
     Genera un archivo Excel profesional y estilizado.
@@ -229,27 +229,28 @@ def generate_excel_report(df):
     """
     output = BytesIO()
     
-    # Asegurar que las columnas numéricas y de fecha tengan el tipo correcto.
+    # 1. Asegurar tipos de datos y crear columna temporal para ordenar.
     df['Recibo N°'] = pd.to_numeric(df['Recibo N°'], errors='coerce')
     df['Agrupación'] = pd.to_numeric(df['Agrupación'], errors='coerce')
-    # Intenta convertir a datetime, si no puede, lo deja como NaT (que se eliminará o se mantendrá como string)
+    df['Valor Efectivo'] = pd.to_numeric(df['Valor Efectivo'], errors='coerce')
     df['Fecha_dt'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
-    df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt'], inplace=True)
+    df.dropna(subset=['Recibo N°', 'Agrupación', 'Fecha_dt', 'Valor Efectivo'], inplace=True)
     
-    # Reordenar las columnas para una presentación lógica en Excel.
-    preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
-    excel_columns = preferred_order + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
-    df = df[excel_columns]
-    
-    # Ordenar por fecha primero, luego por agrupación y recibo.
+    # 2. Ordenar los datos usando la columna temporal.
     df.sort_values(by=['Fecha_dt', 'Agrupación', 'Recibo N°'], inplace=True)
     
-    # Formatear la fecha a string para una correcta visualización en Excel.
-    df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce').dt.strftime('%d/%m/%Y')
-    df = df.drop(columns=['Fecha_dt'], errors='ignore')
-    if 'Fecha' in excel_columns: # Prevenir error si 'Fecha' ya no existe
-        excel_columns.remove('Fecha') 
-    excel_columns.insert(0, 'Fecha') # Poner la columna formateada al inicio
+    # 3. Formatear la columna de fecha a string para la visualización final.
+    df['Fecha'] = df['Fecha_dt'].dt.strftime('%d/%m/%Y')
+
+    # 4. Definir el orden final de columnas y seleccionar solo las necesarias.
+    preferred_order = ['Fecha', 'Recibo N°', 'Serie-Número', 'Cliente', 'Valor Efectivo', 'Agrupación', 'Destino']
+    
+    # Construir la lista final de columnas, manteniendo el orden preferido al inicio.
+    final_columns = preferred_order + [col for col in df.columns if col not in preferred_order and col != 'Fecha_dt']
+    
+    # Asegurarse de que el DataFrame solo contenga las columnas finales.
+    df = df[final_columns]
+    excel_columns = final_columns # Usar esta lista para el resto de la función.
 
     # Separar datos en individuales y grupos de consignación.
     df_individual = df[df['Agrupación'] == 1].copy()
@@ -261,7 +262,7 @@ def generate_excel_report(df):
     if not df_individual.empty:
         for recibo_num, group in df_individual.groupby('Recibo N°', sort=False):
             for _, row in group.iterrows():
-                report_data.append(row.tolist())
+                report_data.append(row[excel_columns].tolist())
             
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
@@ -275,7 +276,7 @@ def generate_excel_report(df):
     if not df_grouped.empty:
         for agrupacion_id, group in df_grouped.groupby('Agrupación', sort=False):
             for _, row in group.iterrows():
-                report_data.append(row.tolist())
+                report_data.append(row[excel_columns].tolist())
             
             subtotal = group['Valor Efectivo'].sum()
             subtotal_row = [''] * len(excel_columns)
@@ -357,20 +358,21 @@ def generate_excel_report(df):
             column_letter = get_column_letter(col_idx)
             for cell in column_cells:
                 try:
-                    # Usar la longitud de la celda de cabecera como mínimo si es muy corta
+                    # Usar la longitud de la celda de cabecera como mínimo
                     current_length = len(str(cell.value))
-                    if row_idx == 1:
-                         current_length = max(len(column_cells[0].value), current_length)
+                    if cell.row == 1:
+                         current_length = max(len(str(column_cells[0].value)), current_length)
                          
                     if current_length > max_length:
                         max_length = current_length
                 except:
                     pass
             # Añadir un margen de 2 para mejor visualización, y asegurar un mínimo de 10.
-            adjusted_width = max(10, (max_length + 2)) 
+            adjusted_width = max(12, (max_length + 2)) 
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
     return output.getvalue()
+
 
 # --- FUNCIONES PARA MANEJAR CONSECUTIVOS ---
 def get_next_series_consecutive(consecutivos_ws, series_name):
@@ -531,9 +533,7 @@ else:
                                 (all_records_df['Serie'] == download_serie)
                             ].copy()
 
-                            # --- INICIO DE LA CORRECCIÓN ---
                             # Se asegura que TODAS las columnas numéricas clave se conviertan aquí.
-                            # Esto previene el TypeError porque los datos se guardan en el estado con el tipo correcto.
                             if not filtered_df.empty:
                                 numeric_cols = ['Valor Efectivo', 'Agrupación', 'Recibo N°']
                                 for col in numeric_cols:
@@ -541,7 +541,6 @@ else:
                                 
                                 # Eliminar filas donde la conversión numérica o de fecha falló.
                                 filtered_df.dropna(subset=['Fecha_dt'] + numeric_cols, inplace=True)
-                            # --- FIN DE LA CORRECCIÓN ---
 
                             if not filtered_df.empty:
                                 st.session_state.df_for_consolidated_download = filtered_df
@@ -556,11 +555,7 @@ else:
                     st.error(f"Ocurrió un error al buscar los registros: {e}")
 
     if 'df_for_consolidated_download' in st.session_state and not st.session_state.df_for_consolidated_download.empty:
-        # Los datos del estado de la sesión ya tienen los tipos correctos, así que solo copiamos.
         df_for_download = st.session_state.df_for_consolidated_download.copy()
-        
-        # El bloque de conversión a numérico que estaba aquí se ha eliminado porque
-        # la conversión ahora se realiza de forma robusta antes de guardar en el estado de la sesión.
         
         # Crear columna 'Serie-Número' para el reporte.
         s_factura = df_for_download['Serie_Factura'].fillna('S/D').astype(str)
@@ -568,8 +563,8 @@ else:
         df_for_download['Serie-Número'] = s_factura + "-" + n_factura
 
         # Generar archivos consolidados.
-        txt_content_dl = generate_txt_content(df_for_download, account_mappings, tarjetas_destinos)
-        excel_file_dl = generate_excel_report(df_for_download)
+        txt_content_dl = generate_txt_content(df_for_download.copy(), account_mappings, tarjetas_destinos)
+        excel_file_dl = generate_excel_report(df_for_download.copy())
         
         dl_btn_col1, dl_btn_col2 = st.columns(2)
         with dl_btn_col1:
@@ -897,7 +892,7 @@ else:
                         n_factura = final_df_to_process['NUMERO_FACTURA'].fillna('S/D').astype(str)
                         final_df_to_process['Serie-Número'] = s_factura + "-" + n_factura
 
-                        txt_content = generate_txt_content(final_df_to_process, account_mappings, tarjetas_destinos)
+                        txt_content = generate_txt_content(final_df_to_process.copy(), account_mappings, tarjetas_destinos)
                         excel_file = generate_excel_report(final_df_to_process.copy())
 
                         # Preparar datos para guardar en Google Sheets.
@@ -972,3 +967,4 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
+
