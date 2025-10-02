@@ -644,8 +644,8 @@ else:
                                     st.session_state.df_full_detail = filtered_df.copy()
                                     
                                     # --- CORRECCIÓN CLAVE: Usar 'sum' para Valor Efectivo ---
-                                    # Se agrupa por 'Recibo N°' y se SUMAN todos los valores de las líneas/facturas
-                                    # asociadas a ese recibo, que es su valor total.
+                                    # Agrupar por 'Recibo N°' y SUMAR todas las líneas de detalle/factura
+                                    # para obtener el valor total del recibo.
                                     df_summary_edit = filtered_df.groupby('Recibo N°').agg(
                                         Fecha=('Fecha', 'first'),
                                         Cliente=('Cliente', 'first'),
