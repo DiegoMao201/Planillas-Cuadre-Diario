@@ -6,7 +6,7 @@ import pandas as pd
 from io import BytesIO
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import groupby
 from operator import itemgetter
 import time
@@ -24,9 +24,9 @@ st.set_page_config(layout="wide", page_title="Recibos de Caja")
 st.title("🧾 Procesamiento de Recibos de Caja v5.5 (Consolidación y Consecutivos Diarios)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
-1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
-2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
-3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
+1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
+2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
+3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
@@ -328,11 +328,17 @@ def generate_excel_report(df):
             column_letter = get_column_letter(col_idx)
             for cell in column_cells:
                 try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(cell.value)
+                    # Usar la longitud de la celda de cabecera como mínimo si es muy corta
+                    current_length = len(str(cell.value))
+                    if row_idx == 1:
+                         current_length = max(len(column_cells[0].value), current_length)
+                         
+                    if current_length > max_length:
+                        max_length = current_length
                 except:
                     pass
-            adjusted_width = (max_length + 2)
+            # Añadir un margen de 2 para mejor visualización, y asegurar un mínimo de 10.
+            adjusted_width = max(10, (max_length + 2)) 
             worksheet.column_dimensions[column_letter].width = adjusted_width
 
     return output.getvalue()
@@ -382,18 +388,21 @@ def delete_existing_records(ws, global_consecutive_to_delete):
     """
     try:
         st.info(f"Buscando registros antiguos con el consecutivo global {global_consecutive_to_delete} para eliminarlos...")
-        all_records = ws.get_all_records()
-        if not all_records:
+        all_records = ws.get_all_values() # Usar get_all_values para obtener todos los datos más rápido.
+        
+        if len(all_records) <= 1:
             st.warning("No hay registros en la hoja para buscar. Se procederá a guardar como si fueran nuevos.")
             return
 
-        df_records = pd.DataFrame(all_records)
+        headers = all_records[0]
+        df_records = pd.DataFrame(all_records[1:], columns=headers)
         
         if 'Consecutivo Global' not in df_records.columns:
             st.error("La hoja 'RegistrosRecibos' no tiene la columna 'Consecutivo Global'. No se puede actualizar.")
             st.stop()
 
         df_records['Consecutivo Global'] = df_records['Consecutivo Global'].astype(str)
+        # Los índices de pandas son base 0, la fila 0 es la cabecera, por eso sumamos 2 (1 por la cabecera y 1 por base 1 de gspread).
         rows_to_delete_indices = df_records[df_records['Consecutivo Global'] == str(global_consecutive_to_delete)].index.tolist()
         
         if not rows_to_delete_indices:
@@ -471,13 +480,14 @@ else:
                             
                             # Limpieza de datos
                             all_records_df = all_records_df.drop(columns=[''], errors='ignore')
+                            # Aseguramos que la columna 'Fecha' sea string para el formato
                             all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                             all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
 
-                            # Filtrar por rango de fechas y serie
+                            # Filtrar por rango de fechas y serie. Se usa <= en el final para ser inclusivo.
                             filtered_df = all_records_df[
-                                (all_records_df['Fecha_dt'] >= pd.to_datetime(start_date)) &
-                                (all_records_df['Fecha_dt'] <= pd.to_datetime(end_date)) &
+                                (all_records_df['Fecha_dt'].dt.date >= start_date) &
+                                (all_records_df['Fecha_dt'].dt.date <= end_date) &
                                 (all_records_df['Serie'] == download_serie)
                             ].copy()
 
@@ -579,13 +589,15 @@ else:
                                 all_records_df = all_records_df.drop(columns=[''], errors='ignore')
                                 
                                 # Convertir fecha para poder comparar rangos
+                                # Usamos errors='coerce' para que las fechas inválidas se conviertan a NaT y se puedan eliminar.
                                 all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                                 all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
 
-                                # Filtrar para encontrar grupos que tengan registros en el rango de fechas y serie buscadas.
+                                # CORRECCIÓN CLAVE: Filtrar para encontrar grupos que tengan registros en el rango de fechas y serie buscadas.
+                                # Se usa .dt.date para comparar solo la parte de la fecha, ignorando la hora, haciendo el filtro inclusivo.
                                 filtered_df = all_records_df[
-                                    (all_records_df['Fecha_dt'] >= pd.to_datetime(search_start_date)) & 
-                                    (all_records_df['Fecha_dt'] <= pd.to_datetime(search_end_date)) &
+                                    (all_records_df['Fecha_dt'].dt.date >= search_start_date) & 
+                                    (all_records_df['Fecha_dt'].dt.date <= search_end_date) &
                                     (all_records_df['Serie'] == search_serie)
                                 ]
                                 
@@ -621,6 +633,7 @@ else:
                     global_consecutive_to_load = group_options[selected_group_display]
                     
                     # Carga el grupo COMPLETO desde el DataFrame guardado, incluyendo todas las fechas.
+                    # Esto es correcto, ya que un grupo global puede tener varias fechas asociadas.
                     group_data_df = st.session_state.full_search_results[
                         st.session_state.full_search_results['Consecutivo Global'].astype(str) == str(global_consecutive_to_load)
                     ].copy()
@@ -636,7 +649,7 @@ else:
                     
                     st.session_state.df_full_detail = group_data_df.copy()
 
-                    # Crear el resumen para la tabla de edición.
+                    # Crear el resumen para la tabla de edición (se agrupa por Recibo N°).
                     df_summary_edit = group_data_df.groupby('Recibo N°').agg(
                         Fecha=('Fecha', 'first'),
                         Cliente=('Cliente', 'first'),
@@ -805,7 +818,7 @@ else:
                             
                             delete_existing_records(registros_recibos_ws, global_consecutive)
 
-                            # --- FIX CLAVE ---
+                            # --- FIX CLAVE (Ya estaba, solo se verifica): Asegura que el merge use las columnas correctas ---
                             # 1. Quitar las columnas 'Agrupación' y 'Destino' del DataFrame original para evitar conflictos en el merge.
                             df_to_update = st.session_state.df_full_detail.drop(columns=['Agrupación', 'Destino'], errors='ignore')
                             
@@ -835,21 +848,36 @@ else:
                         # CORRECCIÓN: Usar el nombre de columna correcto 'Fecha_Procesado'.
                         registros_data_df['Fecha_Procesado'] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
+                        # Asegurarse de que todas las columnas esperadas por gspread estén en el DataFrame
                         gsheet_headers = registros_recibos_ws.row_values(1)
+                        # Creamos un nuevo DataFrame con las columnas de Google Sheets
                         registros_to_append_df = pd.DataFrame(columns=gsheet_headers)
 
                         # Mapear columnas del DataFrame a las columnas de Google Sheets.
+                        # Nombres en tu DataFrame -> Nombres en Google Sheets
                         col_map = {
-                            'Serie_Factura': 'SERIE_FACTURA',
-                            'Numero_Factura': 'NUMERO_FACTURA'
+                            'SERIE_FACTURA': 'Serie_Factura',
+                            'NUMERO_FACTURA': 'Numero_Factura',
+                            'Fecha_Procesado': 'Fecha Procesado',
+                            'Fecha': 'Fecha',
+                            'Recibo N°': 'Recibo N°',
+                            'Cliente': 'Cliente',
+                            'Valor Efectivo': 'Valor Efectivo',
+                            'Agrupación': 'Agrupación',
+                            'Destino': 'Destino',
+                            'Consecutivo Global': 'Consecutivo Global',
+                            'Consecutivo Serie': 'Consecutivo Serie',
+                            'Serie': 'Serie'
                         }
-                        for col in gsheet_headers:
-                            if col in registros_data_df.columns:
-                                registros_to_append_df[col] = registros_data_df[col]
-                            elif col in col_map and col_map[col] in registros_data_df.columns:
-                                registros_to_append_df[col] = registros_data_df[col_map[col]]
                         
+                        # Rellenar el DataFrame a guardar con los datos del DataFrame final
+                        for df_col, gsheet_col in col_map.items():
+                            if df_col in registros_data_df.columns and gsheet_col in gsheet_headers:
+                                registros_to_append_df[gsheet_col] = registros_data_df[df_col]
+                        
+                        # Rellenar las columnas faltantes con cadena vacía.
                         registros_to_append_df = registros_to_append_df[gsheet_headers].fillna('')
+
                         registros_recibos_ws.append_rows(registros_to_append_df.values.tolist(), value_input_option='USER_ENTERED')
                         
                         st.success("✅ ¡Éxito! Los datos han sido guardados en Google Sheets.")
