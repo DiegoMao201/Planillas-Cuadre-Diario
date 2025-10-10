@@ -21,12 +21,12 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 
 # --- TÍTULOS Y DESCRIPCIÓN DE LA APLICACIÓN ---
-st.title("🧾 Procesamiento de Recibos de Caja v5.7 (Corregido)")
+st.title("🧾 Procesamiento de Recibos de Caja v5.8 (Corregido)")
 st.markdown("""
 Esta herramienta ahora permite tres flujos de trabajo:
 1.  **Descargar reportes antiguos**: Busca y descarga un **reporte consolidado** con todos los grupos procesados en un rango de fechas y serie.
 2.  **Cargar un nuevo archivo de Excel**: Procesa un nuevo grupo de recibos, asignando **consecutivos por día** si el archivo abarca varias fechas, y lo guarda generando un reporte detallado.
-3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite editarlo y volver a guardarlo.
+3.  **Buscar y editar un grupo existente**: Carga un grupo completo (incluso con fechas diferentes), permite **editar el valor del recibo** y volver a guardarlo, respetando la serie.
 """)
 
 # --- CONEXIÓN SEGURA A GOOGLE SHEETS ---
@@ -139,8 +139,9 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
                 destino = str(row['Destino'])
                 
                 serie_final_txt = str(series_numeric)
-                if destino in tarjetas_destinos:
-                    serie_final_txt = "T" + serie_final_txt # Prefijo 'T' para tarjetas.
+                # MODIFICACIÓN: Añadir 'Epayco' a la condición para el prefijo 'T'
+                if destino in tarjetas_destinos or destino == 'Epayco':
+                    serie_final_txt = "T" + serie_final_txt # Prefijo 'T' para tarjetas y Epayco.
 
                 if destino in account_mappings:
                     destino_info = account_mappings[destino]
@@ -180,7 +181,8 @@ def generate_txt_content(df, account_mappings, tarjetas_destinos):
                 recibos = group_row['Recibos_Incluidos']
 
                 serie_final_txt = str(series_numeric)
-                if destino in tarjetas_destinos:
+                # MODIFICACIÓN: Añadir 'Epayco' a la condición para el prefijo 'T'
+                if destino in tarjetas_destinos or destino == 'Epayco':
                     serie_final_txt = "T" + serie_final_txt
 
                 if destino in account_mappings:
@@ -361,8 +363,8 @@ def generate_excel_report(df):
                     # Usar la longitud de la celda de cabecera como mínimo
                     current_length = len(str(cell.value))
                     if cell.row == 1:
-                         current_length = max(len(str(column_cells[0].value)), current_length)
-                         
+                        current_length = max(len(str(column_cells[0].value)), current_length)
+                        
                     if current_length > max_length:
                         max_length = current_length
                 except:
@@ -644,7 +646,7 @@ else:
                                 all_records_df['Fecha_dt'] = pd.to_datetime(all_records_df['Fecha'], format='%d/%m/%Y', errors='coerce')
                                 all_records_df.dropna(subset=['Fecha_dt'], inplace=True)
                                 
-                                # Filtrar todos los registros que cumplen con el criterio
+                                # MODIFICACIÓN: Filtrar también por la serie seleccionada.
                                 filtered_df = all_records_df[
                                     (all_records_df['Fecha_dt'].dt.date >= search_start_date) & 
                                     (all_records_df['Fecha_dt'].dt.date <= search_end_date) &
@@ -788,7 +790,7 @@ else:
         st.divider()
         st.header("3. Asigna Agrupación y Destinos")
         
-        st.metric(label="💰 Total Efectivo del Grupo", value=f"${st.session_state.df_full_detail['Valor Efectivo'].sum():,.2f}")
+        st.metric(label="💰 Total Efectivo del Grupo", value=f"${st.session_state.df_for_display['Valor Efectivo'].sum():,.2f}")
 
         # Herramientas de asignación masiva.
         with st.expander("Herramientas de asignación masiva"):
@@ -804,7 +806,7 @@ else:
                     st.session_state.df_for_display['Agrupación'] = agrupacion_masiva
                     st.rerun()
         
-        st.info("Edita la agrupación y el destino para cada recibo. El detalle completo se usará para el reporte final.")
+        st.info("Edita la agrupación, el destino y el valor para cada recibo. El detalle completo se usará para el reporte final.")
         
         # Tabla editable para que el usuario asigne grupos y destinos.
         edited_summary_df = st.data_editor(
@@ -812,7 +814,8 @@ else:
             column_config={
                 "Agrupación": st.column_config.SelectboxColumn("Agrupación", help="Grupo 1 es individual. Grupos >1 se sumarán.", options=opciones_agrupacion, required=True),
                 "Destino": st.column_config.SelectboxColumn("Destino del Efectivo", help="Selecciona el banco o tercero.", options=opciones_destino, required=True),
-                "Valor Efectivo": st.column_config.NumberColumn("Valor Total Recibo", format="$ %.2f", disabled=True),
+                # MODIFICACIÓN: Permitir la edición del valor efectivo.
+                "Valor Efectivo": st.column_config.NumberColumn("Valor Total Recibo", format="$ %.2f", required=True, disabled=False),
                 "Fecha": st.column_config.TextColumn("Fecha", disabled=True),
                 "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
                 "Recibo N°": st.column_config.NumberColumn("Recibo N°", disabled=True),
@@ -832,6 +835,35 @@ else:
                     try:
                         serie_seleccionada = st.session_state.editing_info['serie']
                         
+                        # --- MODIFICACIÓN: Lógica para actualizar los valores de efectivo si fueron editados ---
+                        # Compara el DataFrame editado con el original para encontrar cambios en 'Valor Efectivo'.
+                        comparison_df = pd.merge(
+                            st.session_state.df_for_display.rename(columns={'Valor Efectivo': 'Valor Efectivo_orig'}),
+                            edited_summary_df.rename(columns={'Valor Efectivo': 'Valor Efectivo_edit'}),
+                            on=['Recibo N°', 'Fecha', 'Cliente'] # Usar más claves para una unión robusta
+                        )
+                        changed_values = comparison_df[comparison_df['Valor Efectivo_orig'] != comparison_df['Valor Efectivo_edit']]
+
+                        if not changed_values.empty:
+                            st.info("Actualizando valores de efectivo editados en el detalle...")
+                            df_full_detail_copy = st.session_state.df_full_detail.copy()
+                            for _, row in changed_values.iterrows():
+                                recibo_num = row['Recibo N°']
+                                new_value = row['Valor Efectivo_edit']
+                                
+                                matching_indices = df_full_detail_copy[df_full_detail_copy['Recibo N°'] == recibo_num].index
+                                
+                                if not matching_indices.empty:
+                                    # Pone el nuevo valor total en la primera fila de detalle del recibo.
+                                    df_full_detail_copy.loc[matching_indices[0], 'Valor Efectivo'] = new_value
+                                    # Si hay más filas de detalle para el mismo recibo, las pone en cero para que la suma total coincida.
+                                    if len(matching_indices) > 1:
+                                        df_full_detail_copy.loc[matching_indices[1:], 'Valor Efectivo'] = 0
+                            
+                            # Actualiza el DataFrame de detalle en la sesión.
+                            st.session_state.df_full_detail = df_full_detail_copy
+                            st.success("Valores de efectivo actualizados en el detalle.")
+
                         # --- Lógica Común: Fusionar el resumen editado con el detalle completo ---
                         df_to_update = st.session_state.df_full_detail.drop(columns=['Agrupación', 'Destino', 'Serie'], errors='ignore')
                         
@@ -967,4 +999,3 @@ else:
 
                     except Exception as e:
                         st.error(f"Error al guardar los datos o generar los archivos: {e}")
-
