@@ -1061,7 +1061,7 @@ with tab2:
         CTA_DEBITO = "11100502"  # Cuenta débito
         TERCERO_NIT = "890903938"      # NIT Bancolombia
         TERCERO_NOMBRE = "Bancolombia"
-        TIPO_DOC = "12" 
+        TIPO_DOC = "10" 
         SERIE = "189"
         CENTRO_COSTO = "189"
         
