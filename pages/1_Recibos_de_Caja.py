@@ -1028,34 +1028,38 @@ with tab2:
     st.markdown("""
     Esta herramienta procesa un archivo Excel con dos columnas (`descripcion`, `valor`) y genera el archivo plano para el ERP.
     
-    **Reglas de negocio:**
-    1. Cada fila del Excel genera un crédito a la cuenta `13059901` (Tercero Bancolombia).
-    2. La suma total genera una contrapartida débito a la cuenta `11100502` (Banco).
-    3. Serie y Centro de Costo fijos: **189**.
-    4. Consecutivo y Fecha seleccionables.
+    **Reglas de negocio (Actualizadas):**
+    1. Se genera una línea de **Crédito (13059901)** y una línea de **Débito (11100502)** por cada registro del Excel.
+    2. Serie y Centro de Costo fijos: **189**.
+    3. Puedes asignar manualmente el número de serie.
+    4. Estructura final: `...|Valor|Base|CentroCosto|NIT|Nombre`.
     """)
 
     # --- INPUTS DE USUARIO ---
     st.divider()
-    col_ident_1, col_ident_2 = st.columns(2)
+    col_ident_1, col_ident_2, col_ident_3 = st.columns(3)
     with col_ident_1:
         fecha_identificacion = st.date_input("Fecha para el documento:", datetime.now(), key="fecha_ident")
     with col_ident_2:
         consecutivo_ident = st.number_input("Consecutivo del Documento:", value=11899, step=1, key="consec_ident")
+    with col_ident_3:
+        # Nuevo campo para asignar el número manual después de la serie
+        numero_serie_manual = st.text_input("Número de Serie / Factura Manual:", value="189", key="num_manual_ident")
 
     file_ident = st.file_uploader("📂 Cargar Excel (Columnas: descripcion, valor)", type=['xlsx', 'xls'], key="upload_ident")
 
-    def generate_txt_identificacion_custom(df, fecha_str, consecutivo):
+    def generate_txt_identificacion_custom(df, fecha_str, consecutivo, numero_manual):
         """
         Genera el TXT con formato específico para Identificación.
         Separador: Pipe (|)
+        Genera pares de líneas Crédito/Débito por cada fila del Excel.
         """
         lines = []
         
         # Constantes solicitadas
-        CTA_CREDITO_FILA = "13059901" # Cuenta crédito por cada fila
-        CTA_DEBITO_TOTAL = "11100502" # Cuenta débito por el total
-        TERCERO_NIT = "890903938"     # NIT Bancolombia
+        CTA_CREDITO = "13059901" # Cuenta crédito
+        CTA_DEBITO = "11100502"  # Cuenta débito
+        TERCERO_NIT = "890903938"      # NIT Bancolombia
         TERCERO_NOMBRE = "Bancolombia"
         TIPO_DOC = "12" 
         SERIE = "189"
@@ -1063,54 +1067,55 @@ with tab2:
         
         total_valor = 0
         
-        # 1. Procesar cada fila del Excel (Créditos)
+        # Procesar cada fila del Excel
         for _, row in df.iterrows():
             descripcion = str(row['descripcion']).strip()
             # Limpieza básica del valor por si viene con formato moneda o strings
             try:
-                val_str = str(row['valor']).replace('$', '').replace(',', '').strip()
-                valor = float(val_str)
+                val_str_raw = str(row['valor']).replace('$', '').replace(',', '').strip()
+                valor = float(val_str_raw)
             except:
                 valor = 0.0
             
             total_valor += valor
+            valor_formateado = str(round(valor, 2))
             
-            # Estructura Pipe Separated segun el codigo original
-            # Fecha|Consecutivo|Cuenta|TipoDoc|Detalle|Serie|SerieNum|Debito|Credito|Base|Nit|Nombre|CentroCosto
-            linea = "|".join([
+            # --- LÍNEA 1: CRÉDITO (13059901) ---
+            # Estructura: Fecha|Consecutivo|Cuenta|TipoDoc|Detalle|Serie|NumManual|Debito|Credito|Base|CentroCosto|Nit|Nombre
+            linea_credito = "|".join([
                 fecha_str,
                 str(consecutivo),
-                CTA_CREDITO_FILA,
+                CTA_CREDITO,
                 TIPO_DOC,
                 descripcion,
                 SERIE,
-                SERIE, # Serie numérica repetida como en el ejemplo original
-                "0",  # Débito es 0 en las filas individuales (es un crédito)
-                str(round(valor, 2)), # Crédito es el valor
-                "0",  # Base
-                TERCERO_NIT,
-                TERCERO_NOMBRE,
-                CENTRO_COSTO
+                str(numero_manual), # Numero asignado por el usuario
+                "0",                # Debito
+                valor_formateado,   # Credito
+                "0",                # Base
+                CENTRO_COSTO,       # Centro Costo va despues de los valores/base
+                TERCERO_NIT,        # Luego el NIT
+                TERCERO_NOMBRE      # Ultimo dato el Nombre
             ])
-            lines.append(linea)
-            
-        # 2. Procesar fila de contrapartida (Débito al Banco por el Total)
-        linea_contrapartida = "|".join([
-            fecha_str,
-            str(consecutivo),
-            CTA_DEBITO_TOTAL,
-            TIPO_DOC,
-            f"IDENTIFICACION RECAUDOS {fecha_str}",
-            SERIE,
-            SERIE,
-            str(round(total_valor, 2)), # Débito es el total
-            "0", # Crédito es 0
-            "0",
-            TERCERO_NIT,
-            TERCERO_NOMBRE,
-            CENTRO_COSTO
-        ])
-        lines.append(linea_contrapartida)
+            lines.append(linea_credito)
+
+            # --- LÍNEA 2: DÉBITO (11100502) - Contrapartida inmediata ---
+            linea_debito = "|".join([
+                fecha_str,
+                str(consecutivo),
+                CTA_DEBITO,
+                TIPO_DOC,
+                descripcion,
+                SERIE,
+                str(numero_manual), # Numero asignado por el usuario
+                valor_formateado,   # Debito
+                "0",                # Credito
+                "0",                # Base
+                CENTRO_COSTO,       # Centro Costo
+                TERCERO_NIT,        # NIT
+                TERCERO_NOMBRE      # Nombre
+            ])
+            lines.append(linea_debito)
         
         return "\n".join(lines), total_valor
 
@@ -1137,7 +1142,8 @@ with tab2:
                     txt_content_ident, total_calculado = generate_txt_identificacion_custom(
                         df_ident, 
                         fecha_fmt, 
-                        consecutivo_ident
+                        consecutivo_ident,
+                        numero_serie_manual # Pasamos el nuevo parametro
                     )
                     
                     st.success(f"¡TXT Generado Exitosamente! Total procesado: ${total_calculado:,.2f}")
