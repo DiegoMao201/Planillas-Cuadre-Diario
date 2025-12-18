@@ -1044,7 +1044,7 @@ with tab2:
         consecutivo_ident = st.number_input("Consecutivo del Documento:", value=11899, step=1, key="consec_ident")
     with col_ident_3:
         # Nuevo campo para asignar el número manual después de la serie
-        numero_serie_manual = st.text_input("Número de Serie / Factura Manual:", value="189", key="num_manual_ident")
+        numero_serie_manual = st.text_input("consecutivo manual", value="189", key="num_manual_ident")
 
     file_ident = st.file_uploader("📂 Cargar Excel (Columnas: descripcion, valor)", type=['xlsx', 'xls'], key="upload_ident")
 
