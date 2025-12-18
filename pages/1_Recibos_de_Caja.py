@@ -877,7 +877,7 @@ with tab1:
                                         # Si hay más filas de detalle para el mismo recibo, las pone en cero para que la suma total coincida.
                                         if len(matching_indices) > 1:
                                             df_full_detail_copy.loc[matching_indices[1:], 'Valor Efectivo'] = 0
-                                
+                                    
                                 # Actualiza el DataFrame de detalle en la sesión.
                                 st.session_state.df_full_detail = df_full_detail_copy
                                 st.success("Valores de efectivo actualizados en el detalle.")
@@ -1032,7 +1032,7 @@ with tab2:
     1. Se genera una línea de **Crédito (13059901)** y una línea de **Débito (11100502)** por cada registro del Excel.
     2. Serie y Centro de Costo fijos: **189**.
     3. Puedes asignar manualmente el número de serie.
-    4. Estructura final: `...|Valor|Base|CentroCosto|NIT|Nombre`.
+    4. Estructura final: `...|Valor|CentroCosto|NIT|0|0`.
     """)
 
     # --- INPUTS DE USUARIO ---
@@ -1060,7 +1060,7 @@ with tab2:
         CTA_CREDITO = "13059901" # Cuenta crédito
         CTA_DEBITO = "11100502"  # Cuenta débito
         TERCERO_NIT = "890903938"      # NIT Bancolombia
-        TERCERO_NOMBRE = "Bancolombia"
+        # TERCERO_NOMBRE ELIMINADO SEGUN REQUERIMIENTO
         TIPO_DOC = "10" 
         SERIE = "189"
         CENTRO_COSTO = "189"
@@ -1081,7 +1081,8 @@ with tab2:
             valor_formateado = str(round(valor, 2))
             
             # --- LÍNEA 1: CRÉDITO (13059901) ---
-            # Estructura: Fecha|Consecutivo|Cuenta|TipoDoc|Detalle|Serie|NumManual|Debito|Credito|Base|CentroCosto|Nit|Nombre
+            # Estructura Solicitada: 
+            # Fecha|Consecutivo|Cuenta|TipoDoc|Detalle|Serie|NumManual|Debito|Credito|CentroCosto|Nit|0|0
             linea_credito = "|".join([
                 fecha_str,
                 str(consecutivo),
@@ -1092,10 +1093,12 @@ with tab2:
                 str(numero_manual), # Numero asignado por el usuario
                 "0",                # Debito
                 valor_formateado,   # Credito
-                "0",                # Base
-                CENTRO_COSTO,       # Centro Costo va despues de los valores/base
+                # "0",              # SE ELIMINO LA BASE
+                CENTRO_COSTO,       # Centro Costo va despues de los valores
                 TERCERO_NIT,        # Luego el NIT
-                TERCERO_NOMBRE      # Ultimo dato el Nombre
+                # SE ELIMINO EL NOMBRE
+                "0",                # Filler final 1
+                "0"                 # Filler final 2
             ])
             lines.append(linea_credito)
 
@@ -1110,10 +1113,12 @@ with tab2:
                 str(numero_manual), # Numero asignado por el usuario
                 valor_formateado,   # Debito
                 "0",                # Credito
-                "0",                # Base
+                # "0",              # SE ELIMINO LA BASE
                 CENTRO_COSTO,       # Centro Costo
                 TERCERO_NIT,        # NIT
-                TERCERO_NOMBRE      # Nombre
+                # SE ELIMINO EL NOMBRE
+                "0",                # Filler final 1
+                "0"                 # Filler final 2
             ])
             lines.append(linea_debito)
         
