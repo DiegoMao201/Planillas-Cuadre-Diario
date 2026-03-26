@@ -6,6 +6,8 @@ from app_shared import (
     append_audit_log,
     append_novedad,
     append_request_record,
+    current_colombia_datetime,
+    format_colombia_timestamp,
     find_employee_by_cedula,
     generate_request_id,
     get_reason_metadata,
@@ -87,16 +89,17 @@ def inject_pdf_like_css() -> None:
 
 
 def initialize_form_state() -> None:
+    colombia_now = current_colombia_datetime()
     defaults = {
-        "permiso_fecha_solicitud": datetime.now().date(),
-        "permiso_fecha_inicial": datetime.now().date(),
-        "permiso_fecha_final": datetime.now().date(),
-        "permiso_hora_salida": datetime.now().replace(hour=8, minute=0).time(),
+        "permiso_fecha_solicitud": colombia_now.date(),
+        "permiso_fecha_inicial": colombia_now.date(),
+        "permiso_fecha_final": colombia_now.date(),
+        "permiso_hora_salida": colombia_now.replace(hour=8, minute=0, second=0, microsecond=0).time(),
         "permiso_tiempo_total": "",
         "permiso_persona_cargo": "",
         "permiso_motivo": "1",
         "permiso_cual_licencia": "",
-        "permiso_fecha_compensatorio": datetime.now().date(),
+        "permiso_fecha_compensatorio": colombia_now.date(),
         "permiso_detalle": "",
         "permiso_autorizacion": False,
         "permiso_cedula": "",
@@ -289,7 +292,7 @@ def main() -> None:
 
     reason = get_reason_metadata(motivo)
     request_id = generate_request_id(employee.get("cedula", ""))
-    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    timestamp = format_colombia_timestamp()
 
     attachment_ok, attachment_data = upload_request_attachment(adjunto, request_id)
     record = {
@@ -360,7 +363,7 @@ def main() -> None:
         email_ok, email_message = send_request_email(record)
         if email_ok:
             record["Correo_Enviado_A_RRHH"] = "SI"
-            record["Ultima_Actualizacion"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            record["Ultima_Actualizacion"] = format_colombia_timestamp()
             from app_shared import update_request_record
 
             update_request_record(worksheets["registros"], record["Solicitud_ID"], record)
@@ -378,7 +381,7 @@ def main() -> None:
         elif adjunto and not attachment_ok:
             st.warning("La solicitud quedó guardada, pero el adjunto no se pudo almacenar. Revisa la configuración de Dropbox en secrets.")
         if email_ok:
-            st.info("La solicitud ya fue enviada al correo de coordinacionrecursoshumanos@ferreinox.co.")
+            st.info("La solicitud ya fue enviada al correo de talentohumano@ferreinox.co.")
         else:
             st.warning(f"La solicitud quedo guardada, pero el correo no se pudo enviar: {email_message}")
         clear_form()

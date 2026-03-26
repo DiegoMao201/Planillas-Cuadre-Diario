@@ -14,6 +14,9 @@ from app_shared import (
     append_audit_log,
     append_novedad,
     build_whatsapp_url,
+    current_colombia_datetime,
+    current_colombia_date,
+    format_colombia_timestamp,
     get_auxiliary_records,
     get_request_records,
     get_solicitudes_worksheets,
@@ -205,9 +208,24 @@ def prepare_request_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def _date_bounds(df: pd.DataFrame) -> tuple[date, date]:
     valid_dates = df["Fecha_Solicitud_dt"].dropna()
     if valid_dates.empty:
-        today = date.today()
+        today = current_colombia_date()
         return today, today
     return valid_dates.min().date(), valid_dates.max().date()
+
+
+def vacations_snapshot(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    today = current_colombia_date()
+    vacations_df = df[(df["Tipo_Solicitud"] == "Vacaciones") & (df["Estado"] == "Aprobada")].copy()
+    active_df = vacations_df[
+        (vacations_df["Fecha_Inicial_dt"].dt.date <= today)
+        & (vacations_df["Fecha_Final_dt"].dt.date >= today)
+    ].copy()
+    upcoming_df = vacations_df[
+        vacations_df["Fecha_Inicial_dt"].dt.date > today
+    ].copy()
+    upcoming_df.sort_values(by=["Fecha_Inicial_dt", "Sede", "Nombre_Completo"], inplace=True)
+    active_df.sort_values(by=["Sede", "Nombre_Completo", "Fecha_Inicial_dt"], inplace=True)
+    return active_df, upcoming_df
 
 
 def group_summary(df: pd.DataFrame, column_name: str, empty_label: str, top_n: int | None = None) -> pd.DataFrame:
@@ -391,7 +409,7 @@ def generate_report_excel(
         summary_ws["B2"] = "FERREINOX | Reporte Gerencial de Solicitudes"
         summary_ws["B2"].font = Font(size=16, bold=True, color=TEXT)
         summary_ws["B3"] = "Corte generado"
-        summary_ws["C3"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        summary_ws["C3"] = format_colombia_timestamp()
         summary_ws["B4"] = "Origen"
         summary_ws["C4"] = "Portal administrativo de solicitudes"
 
@@ -459,7 +477,7 @@ def generate_report_excel(
         detail_ws["A2"] = "Rango exportado"
         detail_ws["B2"] = filter_summary["Rango de fechas"]
         detail_ws["A3"] = "Generado"
-        detail_ws["B3"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        detail_ws["B3"] = format_colombia_timestamp()
         style_sheet(detail_ws, header_row=5, freeze_cell="A6")
 
         novedades_ws = writer.sheets["Novedades"]
@@ -610,13 +628,16 @@ def main() -> None:
         .reset_index(name="Cantidad")
         .sort_values(by="Periodo_Mensual")
     )
+    active_vacations_df, upcoming_vacations_df = vacations_snapshot(filtered_df)
+    vacations_by_sede = group_summary(active_vacations_df, "Sede", "Sin sede") if not active_vacations_df.empty else pd.DataFrame(columns=["Sede", "Cantidad", "Participacion"])
+    today_colombia = current_colombia_date()
     pending_focus_df = filtered_df[filtered_df["Estado"].isin(["Pendiente", "En revision"])].copy()
     pending_focus_df.sort_values(by=["Fecha_Solicitud_dt", "Sede"], ascending=[True, True], inplace=True)
 
     tabs = st.tabs([
         "Resumen Ejecutivo",
-        "Analitica Gerencial",
-        "Gestion Operativa",
+        "Vacaciones Activas",
+        "Responder Solicitudes",
         "Trazabilidad",
     ])
 
@@ -676,51 +697,67 @@ def main() -> None:
                 executive_html,
             )
             st.write("")
-            st.dataframe(status_summary, use_container_width=True, hide_index=True)
+            with st.expander("Ver consolidado de estados", expanded=False):
+                st.dataframe(status_summary, use_container_width=True, hide_index=True)
 
     with tabs[1]:
         analytic_top = st.columns([1.25, 1])
         with analytic_top[0]:
             render_info_panel(
-                "Descarga profesional entre fechas",
-                "Exportacion ejecutiva con resumen, detalle, novedades y auditoria del corte filtrado.",
-                "<div class='fx-mini-grid'><div class='fx-mini-card'><div class='mini-label'>Formato</div><div class='mini-value'>Excel multicapa</div></div><div class='fx-mini-card'><div class='mini-label'>Incluye</div><div class='mini-value'>Resumen, detalle y trazabilidad</div></div></div>",
+                "Monitoreo central de vacaciones",
+                "Control vigente de colaboradores en vacaciones para seguimiento transversal de todas las sedes.",
+                f"<div class='fx-mini-grid'><div class='fx-mini-card'><div class='mini-label'>Vacaciones activas hoy</div><div class='mini-value'>{len(active_vacations_df)}</div></div><div class='fx-mini-card'><div class='mini-label'>Programadas mas adelante</div><div class='mini-value'>{len(upcoming_vacations_df)}</div></div><div class='fx-mini-card'><div class='mini-label'>Fecha de corte Colombia</div><div class='mini-value'>{today_colombia.strftime('%d/%m/%Y')}</div></div></div>",
             )
         with analytic_top[1]:
-            st.download_button(
-                "Descargar Excel gerencial",
-                data=report_excel,
-                file_name=f"reporte_gerencial_solicitudes_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                type="primary",
+            render_info_panel(
+                "Visibilidad por sedes",
+                "Identifique rapidamente donde hay mayor concentracion de vacaciones activas para balance operativo.",
+                "<div class='fx-mini-grid'><div class='fx-mini-card'><div class='mini-label'>Sedes con vacaciones activas</div><div class='mini-value'>{}</div></div><div class='fx-mini-card'><div class='mini-label'>Estado monitoreado</div><div class='mini-value'>Aprobadas vigentes</div></div></div>".format(len(vacations_by_sede)),
             )
 
         chart_cols = st.columns(2)
         with chart_cols[0]:
-            st.markdown("#### Distribucion por estado")
-            st.bar_chart(status_summary.set_index("Estado")["Cantidad"], use_container_width=True)
-            st.dataframe(status_summary, use_container_width=True, hide_index=True)
-        with chart_cols[1]:
-            st.markdown("#### Distribucion por tipo de solicitud")
-            st.bar_chart(type_summary.set_index("Tipo_Solicitud")["Cantidad"], use_container_width=True)
-            st.dataframe(type_summary, use_container_width=True, hide_index=True)
-
-        chart_cols_2 = st.columns(2)
-        with chart_cols_2[0]:
-            st.markdown("#### Comportamiento por sede")
-            st.bar_chart(sede_summary.set_index("Sede")["Cantidad"], use_container_width=True)
-            st.dataframe(sede_summary, use_container_width=True, hide_index=True)
-        with chart_cols_2[1]:
-            st.markdown("#### Tendencia mensual de solicitudes")
-            if not monthly_summary.empty:
-                st.line_chart(monthly_summary.set_index("Periodo_Mensual")["Cantidad"], use_container_width=True)
-                st.dataframe(monthly_summary, use_container_width=True, hide_index=True)
+            st.markdown("#### Vacaciones activas por sede")
+            if not vacations_by_sede.empty:
+                st.bar_chart(vacations_by_sede.set_index("Sede")["Cantidad"], use_container_width=True)
             else:
-                st.caption("No hay datos suficientes para tendencia mensual.")
+                st.caption("No hay vacaciones activas en la fecha actual de Colombia.")
+        with chart_cols[1]:
+            st.markdown("#### Próximas vacaciones aprobadas")
+            next_vacations = upcoming_vacations_df[["Nombre_Completo", "Sede", "Fecha_Inicial", "Fecha_Final"]].head(10) if not upcoming_vacations_df.empty else pd.DataFrame()
+            if next_vacations.empty:
+                st.caption("No hay vacaciones futuras dentro del corte filtrado.")
+            else:
+                st.dataframe(next_vacations, use_container_width=True, hide_index=True)
 
-        st.markdown("#### Empleados con mayor volumen en el corte")
-        st.dataframe(employee_summary, use_container_width=True, hide_index=True)
+        st.markdown("#### Personal actualmente en vacaciones")
+        if active_vacations_df.empty:
+            st.info("Hoy no hay colaboradores en vacaciones dentro del corte filtrado.")
+        else:
+            st.dataframe(
+                active_vacations_df[[
+                    "Nombre_Completo",
+                    "Cedula",
+                    "Cargo",
+                    "Sede",
+                    "Fecha_Inicial",
+                    "Fecha_Final",
+                    "Dias_Aprobados",
+                    "Responsable_Revision",
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        with st.expander("Ver detalle adicional de vacaciones y sedes", expanded=False):
+            if not vacations_by_sede.empty:
+                st.dataframe(vacations_by_sede, use_container_width=True, hide_index=True)
+            if not upcoming_vacations_df.empty:
+                st.dataframe(
+                    upcoming_vacations_df[["Nombre_Completo", "Sede", "Fecha_Inicial", "Fecha_Final", "Dias_Aprobados"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     selectable = filtered_df[["Solicitud_ID", "Nombre_Completo", "Estado", "Tipo_Solicitud", "Fecha_Solicitud"]].copy()
     selectable["Etiqueta"] = selectable.apply(
@@ -736,7 +773,24 @@ def main() -> None:
     selected_record = filtered_df[filtered_df["Solicitud_ID"] == selected_id].iloc[0].to_dict()
 
     with tabs[2]:
-        st.markdown("#### Corte detallado para gestion operativa")
+        top_manage_cols = st.columns([1.25, 1])
+        with top_manage_cols[0]:
+            render_info_panel(
+                "Respuesta administrativa focalizada",
+                "La gestion de aprobacion o negacion se separa de la analitica para reducir carga visual y acelerar la respuesta.",
+                "<div class='fx-mini-grid'><div class='fx-mini-card'><div class='mini-label'>Solicitudes visibles</div><div class='mini-value'>{}</div></div><div class='fx-mini-card'><div class='mini-label'>Pendientes + revision</div><div class='mini-value'>{}</div></div></div>".format(total_requests, pending_count + review_count),
+            )
+        with top_manage_cols[1]:
+            st.download_button(
+                "Descargar Excel gerencial",
+                data=report_excel,
+                file_name=f"reporte_gerencial_solicitudes_{current_colombia_datetime().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary",
+            )
+
+        st.markdown("#### Solicitudes del corte para respuesta")
         report_columns = [
             "Solicitud_ID",
             "Fecha_Solicitud",
@@ -750,7 +804,8 @@ def main() -> None:
             "Fecha_Final",
             "Responsable_Revision",
         ]
-        st.dataframe(filtered_df[report_columns], use_container_width=True, hide_index=True)
+        with st.expander("Ver listado consolidado del corte", expanded=False):
+            st.dataframe(filtered_df[report_columns], use_container_width=True, hide_index=True)
 
         detail_html = """
         <div class='fx-mini-grid'>
@@ -856,9 +911,9 @@ def main() -> None:
                 selected_record["Dias_Pendientes_Periodo"] = dias_pendientes.strip()
                 selected_record["Fecha_Reincorporacion"] = reincorporacion.strip()
                 selected_record["Observaciones_RRHH"] = observaciones.strip()
-                selected_record["Fecha_Respuesta"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                selected_record["Fecha_Respuesta"] = format_colombia_timestamp()
                 selected_record["Whatsapp_Listo"] = "SI" if medio in ["WhatsApp", "WhatsApp y Correo"] else "NO"
-                selected_record["Ultima_Actualizacion"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                selected_record["Ultima_Actualizacion"] = format_colombia_timestamp()
 
                 update_request_record(worksheets["registros"], selected_id, selected_record)
                 append_audit_log(
@@ -890,7 +945,7 @@ def main() -> None:
             email_ok, email_message = send_employee_response_email(selected_record)
             if email_ok:
                 selected_record["Correo_Respuesta_Empleado"] = "SI"
-                selected_record["Ultima_Actualizacion"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                selected_record["Ultima_Actualizacion"] = format_colombia_timestamp()
                 update_request_record(worksheets["registros"], selected_id, selected_record)
                 append_audit_log(
                     worksheets["auditoria"],
@@ -905,7 +960,7 @@ def main() -> None:
 
         if action_cols[2].button("Marcar en revision", use_container_width=True):
             selected_record["Estado"] = "En revision"
-            selected_record["Ultima_Actualizacion"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            selected_record["Ultima_Actualizacion"] = format_colombia_timestamp()
             update_request_record(worksheets["registros"], selected_id, selected_record)
             append_audit_log(
                 worksheets["auditoria"],

@@ -9,6 +9,7 @@ import os
 import re
 import smtplib
 import unicodedata
+from zoneinfo import ZoneInfo
 
 import dropbox
 import gspread
@@ -34,6 +35,7 @@ VIATICOS_PAGE = "pages/2_Viaticos.py"
 SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
 DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
+COLOMBIA_TZ = ZoneInfo("America/Bogota")
 
 REQUEST_REASONS = [
     {
@@ -156,6 +158,18 @@ DEFAULT_PARAMETER_ROWS = [
         for item in REQUEST_REASONS
     ],
 ]
+
+
+def current_colombia_datetime() -> datetime:
+    return datetime.now(COLOMBIA_TZ)
+
+
+def current_colombia_date() -> date:
+    return current_colombia_datetime().date()
+
+
+def format_colombia_timestamp() -> str:
+    return current_colombia_datetime().strftime("%d/%m/%Y %H:%M:%S")
 
 
 def initialize_access_state() -> None:
@@ -534,7 +548,7 @@ def _sheet_value(value: object) -> str:
 
 
 def generate_request_id(cedula: str) -> str:
-    return f"SOL-{datetime.now().strftime('%Y%m%d%H%M%S')}-{_clean_digits(cedula)[-4:]}"
+    return f"SOL-{current_colombia_datetime().strftime('%Y%m%d%H%M%S')}-{_clean_digits(cedula)[-4:]}"
 
 
 def get_reason_metadata(reason_code: str) -> dict[str, str]:
@@ -649,9 +663,9 @@ def update_request_record(worksheet, request_id: str, record: dict[str, object])
 
 def append_novedad(worksheet, record: dict[str, str], event_type: str, summary: str, channel: str, responsible: str) -> None:
     row = [
-        f"NOV-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+        f"NOV-{current_colombia_datetime().strftime('%Y%m%d%H%M%S%f')}",
         record.get("Solicitud_ID", ""),
-        datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        format_colombia_timestamp(),
         event_type,
         record.get("Estado", ""),
         responsible,
@@ -667,9 +681,9 @@ def append_novedad(worksheet, record: dict[str, str], event_type: str, summary: 
 
 def append_audit_log(worksheet, request_id: str, action: str, responsible: str, detail: str) -> None:
     row = [
-        f"AUD-{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+        f"AUD-{current_colombia_datetime().strftime('%Y%m%d%H%M%S%f')}",
         request_id,
-        datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        format_colombia_timestamp(),
         action,
         responsible,
         detail,
