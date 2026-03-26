@@ -17,6 +17,8 @@ import hashlib
 import yagmail
 import smtplib
 
+from app_shared import initialize_access_state, render_sidebar, require_access
+
 # --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
 def check_password():
     """
@@ -1047,6 +1049,7 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
 # --- 7. FLUJO PRINCIPAL DE LA APLICACIÓN ---
 def main():
     """Función principal que ejecuta la aplicación Streamlit."""
+    render_sidebar("Cuadre diario")
     st.title("CUADRE DIARIO DE CAJA")
 
     worksheets = connect_to_gsheet()
@@ -1085,6 +1088,10 @@ def main():
 # --- BLOQUE DE EJECUCIÓN PRINCIPAL ---
 if __name__ == "__main__":
     initialize_session_state()
-
-    if check_password():
-        main()
+    initialize_access_state()
+    require_access(
+        "operations",
+        "Cuadre diario de caja",
+        "Este modulo sigue protegido por la clave operativa. Los empleados solo ven el formulario abierto de solicitudes.",
+    )
+    main()

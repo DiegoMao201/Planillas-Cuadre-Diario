@@ -16,9 +16,18 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
+from app_shared import initialize_access_state, render_sidebar, require_access
+
 # --- CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT ---
 # Configura la página para que use un layout ancho y tenga un título.
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
+initialize_access_state()
+require_access(
+    "operations",
+    "Recibos de caja",
+    "Este modulo hace parte del acceso operativo y administrativo controlado por clave.",
+)
+render_sidebar("Recibos de caja")
 
 # --- CREACIÓN DE PESTAÑAS (TABS) ---
 # Aquí dividimos la aplicación en dos secciones grandes

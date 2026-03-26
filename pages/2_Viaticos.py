@@ -15,6 +15,8 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
 import hashlib
 
+from app_shared import initialize_access_state, render_sidebar, require_access
+
 # --- FUNCIÓN DE AUTENTICACIÓN (Reutilizada) ---
 def check_password():
     """Muestra un formulario de login y retorna True si la contraseña es correcta."""
@@ -522,6 +524,12 @@ def main():
 
 # --- BLOQUE DE EJECUCIÓN PRINCIPAL ---
 if __name__ == "__main__":
-    if check_password():
-        initialize_viaticos_state()
-        main()
+    initialize_access_state()
+    require_access(
+        "admin",
+        "Gestion de viaticos",
+        "Este modulo queda bajo acceso administrativo.",
+    )
+    render_sidebar("Viaticos")
+    initialize_viaticos_state()
+    main()
