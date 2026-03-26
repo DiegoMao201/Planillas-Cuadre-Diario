@@ -21,8 +21,12 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 APP_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = APP_DIR.parent
-EMPLOYEE_MASTER_PATH = WORKSPACE_DIR / "base_datos_empleados.xlsx"
 LOGO_PATH = APP_DIR / "LOGO FERREINOX SAS BIC 2024.png"
+EMPLOYEE_MASTER_CANDIDATES = [
+    APP_DIR / "base_datos_empleados.xlsx",
+    APP_DIR / "data" / "base_datos_empleados.xlsx",
+    WORKSPACE_DIR / "base_datos_empleados.xlsx",
+]
 
 MAIN_PAGE = "Planillas.py"
 RECIBOS_PAGE = "pages/1_Recibos_de_Caja.py"
@@ -302,6 +306,16 @@ def inject_shared_css() -> None:
     )
 
 
+def resolve_employee_master_path() -> Path:
+    for candidate in EMPLOYEE_MASTER_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    searched_paths = ", ".join(str(path) for path in EMPLOYEE_MASTER_CANDIDATES)
+    raise FileNotFoundError(
+        f"No se encontro base_datos_empleados.xlsx. Rutas revisadas: {searched_paths}"
+    )
+
+
 def render_sidebar(active_label: str) -> None:
     initialize_access_state()
     with st.sidebar:
@@ -404,12 +418,8 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
 
 @st.cache_data(ttl=900)
 def load_employee_master() -> pd.DataFrame:
-    if not EMPLOYEE_MASTER_PATH.exists():
-        raise FileNotFoundError(
-            f"No se encontro el archivo de empleados en {EMPLOYEE_MASTER_PATH}."
-        )
-
-    df = pd.read_excel(EMPLOYEE_MASTER_PATH, sheet_name="Base Empleados")
+    employee_master_path = resolve_employee_master_path()
+    df = pd.read_excel(employee_master_path, sheet_name="Base Empleados")
     df = df.loc[:, [column for column in df.columns if str(column).strip()]]
 
     column_map = {

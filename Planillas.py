@@ -667,8 +667,9 @@ def clear_form_state():
     tienda = st.session_state.get('tienda_seleccionada', None)
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
     auth_status = st.session_state.get('authenticated', False)
+    access_role = st.session_state.get('access_role', 'guest')
     
-    keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada', 'authenticated']
+    keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada', 'authenticated', 'access_role']
     for key in list(st.session_state.keys()):
         if key not in keys_to_keep:
             del st.session_state[key]
@@ -677,6 +678,7 @@ def clear_form_state():
     st.session_state.tienda_seleccionada = tienda
     st.session_state.fecha_seleccionada = fecha
     st.session_state.authenticated = auth_status
+    st.session_state.access_role = access_role
 
 # --- 5. COMPONENTES DE LA INTERFAZ DE USUARIO ---
 def format_currency(num):
