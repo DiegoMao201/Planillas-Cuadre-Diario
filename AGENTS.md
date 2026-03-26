@@ -58,7 +58,16 @@ config_sheet_name = "Configuracion"
 [email]
 sender_email = "correo@empresa.com"
 sender_password = "clave_aplicacion"
-permissions_recipient = "cordinacionrecursoshumanos@ferreinox.co"
+permissions_recipient = "talentohumano@ferreinox.co"
+```
+
+Tambien se acepta este formato alterno:
+
+```toml
+[email_credentials]
+sender_email = "correo@empresa.com"
+sender_password = "clave_aplicacion"
+recipient_email = "talentohumano@ferreinox.co"
 ```
 
 ### Adjuntos

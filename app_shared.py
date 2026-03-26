@@ -33,6 +33,7 @@ RECIBOS_PAGE = "pages/1_Recibos_de_Caja.py"
 VIATICOS_PAGE = "pages/2_Viaticos.py"
 SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
+DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
 
 REQUEST_REASONS = [
     {
@@ -559,16 +560,82 @@ def build_whatsapp_url(record: dict[str, str]) -> str:
     if not phone_number:
         return ""
 
-    status = record.get("Estado", "Pendiente")
+    message = build_whatsapp_message(record)
+    return f"https://wa.me/{phone_number}?text={quote(message)}"
+
+
+def build_whatsapp_message(record: dict[str, str]) -> str:
     employee = record.get("Nombre_Completo", "Empleado")
     request_id = record.get("Solicitud_ID", "")
-    request_type = record.get("Tipo_Solicitud", "solicitud")
-    detail = record.get("Observaciones_RRHH", "")
-    message = (
-        f"Hola {employee}. La {request_type.lower()} {request_id} fue {status.lower()}. "
-        f"Observaciones: {detail or 'Sin observaciones adicionales.'}"
-    )
-    return f"https://wa.me/{phone_number}?text={quote(message)}"
+    status = record.get("Estado", "Pendiente")
+    request_type = record.get("Tipo_Solicitud", "Solicitud")
+    reason = record.get("Motivo_Descripcion", "")
+    start_date = record.get("Fecha_Inicial", "")
+    end_date = record.get("Fecha_Final", "")
+    hour = record.get("Hora_Salida", "")
+    total_time = record.get("Tiempo_Total", "")
+    approved_days = record.get("Dias_Aprobados", "")
+    reincorporation = record.get("Fecha_Reincorporacion", "")
+    observations = record.get("Observaciones_RRHH", "") or "Sin observaciones adicionales."
+    responsible = record.get("Responsable_Revision", "Talento Humano") or "Talento Humano"
+
+    period_text = ""
+    if start_date and end_date and start_date != end_date:
+        period_text = f"del {start_date} al {end_date}"
+    else:
+        period_text = start_date or end_date
+
+    reason_lower = reason.lower()
+    status_lower = status.lower()
+    detail_lines: list[str] = []
+
+    if request_type == "Vacaciones":
+        if status == "Aprobada":
+            detail_lines.append(f"Su solicitud de vacaciones fue aprobada para el periodo {period_text}.".strip())
+            if approved_days:
+                detail_lines.append(f"Dias aprobados: {approved_days}.")
+            if reincorporation:
+                detail_lines.append(f"Fecha de reincorporacion: {reincorporation}.")
+        elif status == "Negada":
+            detail_lines.append(f"Su solicitud de vacaciones para el periodo {period_text} no fue aprobada.".strip())
+        else:
+            detail_lines.append(f"Su solicitud de vacaciones se encuentra {status_lower}.".strip())
+    elif "cita medica" in reason_lower or "medico" in reason_lower:
+        schedule_text = period_text or "la fecha registrada"
+        if hour:
+            schedule_text = f"{schedule_text} a las {hour}".strip()
+        if total_time:
+            schedule_text = f"{schedule_text} con un tiempo estimado de {total_time}".strip()
+        if status == "Aprobada":
+            detail_lines.append(f"Fue autorizado su permiso por cita medica para {schedule_text}.".strip())
+        elif status == "Negada":
+            detail_lines.append(f"No fue autorizado su permiso por cita medica solicitado para {schedule_text}.".strip())
+        else:
+            detail_lines.append(f"Su permiso por cita medica se encuentra {status_lower}.".strip())
+    else:
+        subject_text = f"su {request_type.lower()}" if request_type else "su solicitud"
+        if status == "Aprobada":
+            detail_lines.append(f"Fue aprobada {subject_text} {period_text and f'para {period_text}' or ''}.".replace("  ", " ").strip())
+        elif status == "Negada":
+            detail_lines.append(f"No fue aprobada {subject_text} {period_text and f'para {period_text}' or ''}.".replace("  ", " ").strip())
+        else:
+            detail_lines.append(f"{subject_text.capitalize()} se encuentra {status_lower}.".strip())
+        if reason:
+            detail_lines.append(f"Motivo registrado: {reason}.")
+        if total_time and request_type != "Vacaciones":
+            detail_lines.append(f"Tiempo solicitado: {total_time}.")
+
+    detail_lines.append(f"Solicitud: {request_id}.")
+    detail_lines.append(f"Observaciones de Talento Humano: {observations}")
+    detail_lines.append(f"Gestionado por: {responsible}.")
+    detail_lines.append("Si requiere aclaraciones, por favor comuniquese con Talento Humano.")
+
+    return "\n".join([f"Hola {employee}.", "", *detail_lines])
+
+
+def _approval_review_url() -> str:
+    links = st.secrets.get("app_links", {})
+    return links.get("permissions_review_url", DEFAULT_APPROVAL_URL)
 
 
 def append_request_record(worksheet, record: dict[str, object]) -> None:
@@ -704,13 +771,13 @@ def refresh_management_report(worksheet, df: pd.DataFrame) -> None:
 
 
 def _email_settings() -> dict[str, str]:
-    settings = st.secrets.get("email", {})
+    settings = st.secrets.get("email", {}) or st.secrets.get("email_credentials", {})
     return {
         "sender_email": settings.get("sender_email", ""),
         "sender_password": settings.get("sender_password", ""),
         "permissions_recipient": settings.get(
             "permissions_recipient",
-            "cordinacionrecursoshumanos@ferreinox.co",
+            settings.get("recipient_email", "talentohumano@ferreinox.co"),
         ),
     }
 
@@ -776,7 +843,7 @@ def _send_email(to: str, subject: str, contents: str) -> tuple[bool, str]:
     sender_email = settings["sender_email"]
     sender_password = settings["sender_password"]
     if not sender_email or not sender_password:
-        return False, "No se encontraron credenciales de correo en st.secrets['email']."
+        return False, "No se encontraron credenciales de correo en st.secrets['email'] ni en st.secrets['email_credentials']."
 
     try:
         yag = yagmail.SMTP(sender_email, sender_password)
@@ -788,7 +855,13 @@ def _send_email(to: str, subject: str, contents: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _request_email_body(record: dict[str, str], heading: str, footer: str = "") -> str:
+def _request_email_body(
+    record: dict[str, str],
+    heading: str,
+    footer: str = "",
+    action_url: str = "",
+    action_label: str = "",
+) -> str:
     detail_rows = [
         ("Solicitud", record.get("Solicitud_ID", "")),
         ("Empleado", record.get("Nombre_Completo", "")),
@@ -810,12 +883,24 @@ def _request_email_body(record: dict[str, str], heading: str, footer: str = "") 
         f"<tr><td style='padding:8px;border:1px solid #d7e3eb;font-weight:700;background:#f4f8fb;'>{html.escape(label)}</td><td style='padding:8px;border:1px solid #d7e3eb;'>{html.escape(value or '')}</td></tr>"
         for label, value in detail_rows
     )
+    action_html = ""
+    if action_url:
+        action_html = f"""
+        <div style='margin-top:1rem;padding:1rem 1.2rem;border-radius:16px;background:#eef6fb;border:1px solid #cfe2ef;'>
+            <p style='margin:0 0 0.8rem 0;font-weight:700;color:#0b3954;'>Acceso directo para gestion</p>
+            <a href='{html.escape(action_url)}' style='display:inline-block;padding:0.8rem 1.1rem;background:#0b3954;color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;'>
+                {html.escape(action_label or 'Abrir portal de gestion')}
+            </a>
+            <p style='margin:0.8rem 0 0 0;font-size:0.85rem;color:#557085;'>Si el boton no abre, copie este enlace en el navegador:<br>{html.escape(action_url)}</p>
+        </div>
+        """
     return f"""
     <div style='font-family:Segoe UI, Arial, sans-serif; color:#183b56;'>
         <h2 style='margin-bottom:0.5rem;'>{html.escape(heading)}</h2>
         <table style='border-collapse:collapse; width:100%;'>
             {rows_html}
         </table>
+        {action_html}
         <p style='margin-top:1rem;'>{html.escape(footer)}</p>
     </div>
     """
@@ -828,6 +913,8 @@ def send_request_email(record: dict[str, str]) -> tuple[bool, str]:
         record,
         "Nueva solicitud registrada en Ferreinox",
         "Revise la solicitud en la pagina administrativa para aprobarla o negarla.",
+        action_url=_approval_review_url(),
+        action_label="Abrir enlace de revision y aprobacion",
     )
     return _send_email(recipient, subject, body)
 
