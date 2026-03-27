@@ -258,6 +258,20 @@ def logout() -> None:
     st.session_state["last_access_error"] = ""
 
 
+AUTH_SESSION_KEYS = ["authenticated", "access_role", "last_access_error"]
+
+
+def reset_session_state(*preserved_keys: str) -> None:
+    keys_to_keep = set(AUTH_SESSION_KEYS)
+    keys_to_keep.update(preserved_keys)
+
+    for key in list(st.session_state.keys()):
+        if key not in keys_to_keep:
+            del st.session_state[key]
+
+    initialize_access_state()
+
+
 def render_brand_header(title: str, subtitle: str = "") -> None:
     header_cols = st.columns([1, 4])
     with header_cols[0]:

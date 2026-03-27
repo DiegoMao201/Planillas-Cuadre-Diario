@@ -13,37 +13,10 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from openpyxl.utils import get_column_letter
-import hashlib
 import yagmail
 import smtplib
 
 from app_shared import initialize_access_state, render_sidebar, require_access
-
-# --- FUNCIÓN PARA VERIFICAR LA CONTRASEÑA ---
-def check_password():
-    """
-    Muestra un formulario de login y retorna True si la contraseña es correcta.
-    """
-    if st.session_state.get("authenticated", False):
-        return True
-
-    st.header("🔐 Autenticación Requerida")
-    st.write("Por favor, ingrese la contraseña para acceder al formulario.")
-
-    with st.form("login"):
-        password = st.text_input("Contraseña", type="password")
-        submitted = st.form_submit_button("Ingresar")
-
-        if submitted:
-            hashed_input = hashlib.sha256(password.encode()).hexdigest()
-            correct_hashed_password = st.secrets["credentials"]["hashed_password"]
-            
-            if hashed_input == correct_hashed_password:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("La contraseña es incorrecta.")
-    return False
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Cuadre Diario de Caja")

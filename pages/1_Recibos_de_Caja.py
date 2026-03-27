@@ -16,7 +16,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-from app_shared import initialize_access_state, render_sidebar, require_access
+from app_shared import initialize_access_state, render_sidebar, require_access, reset_session_state
 
 # --- CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT ---
 # Configura la página para que use un layout ancho y tenga un título.
@@ -620,9 +620,7 @@ with tab1:
         # Botones para cambiar entre modo 'nuevo' y 'editar'.
         if col_mode_1.button("🆕 Procesar Nuevo Archivo", use_container_width=True, type="primary" if st.session_state.mode == 'new' else "secondary"):
             # Limpia el estado de la sesión para empezar de cero.
-            for key in list(st.session_state.keys()):
-                if key not in ['mode', 'google_credentials']:
-                    del st.session_state[key]
+            reset_session_state('mode', 'google_credentials')
             st.session_state.mode = 'new'
             st.session_state.df_full_detail = pd.DataFrame() # Reiniciar DataFrames
             st.session_state.df_for_display = pd.DataFrame()
@@ -630,9 +628,7 @@ with tab1:
 
         if col_mode_2.button("✏️ Editar Grupo Existente", use_container_width=True, type="primary" if st.session_state.mode == 'edit' else "secondary"):
             # Limpia el estado de la sesión para empezar de cero.
-            for key in list(st.session_state.keys()):
-                if key not in ['mode', 'google_credentials']:
-                    del st.session_state[key]
+            reset_session_state('mode', 'google_credentials')
             st.session_state.mode = 'edit'
             st.session_state.df_full_detail = pd.DataFrame() # Reiniciar DataFrames
             st.session_state.df_for_display = pd.DataFrame()
@@ -1016,9 +1012,7 @@ with tab1:
                                 )
 
                             # Limpiar sesión para el siguiente ciclo.
-                            for key in list(st.session_state.keys()):
-                                if key not in ['mode', 'google_credentials']:
-                                    del st.session_state[key]
+                            reset_session_state('mode', 'google_credentials')
                             
                             st.info("El proceso ha finalizado. La página se recargará para iniciar un nuevo ciclo.")
                             time.sleep(5)
