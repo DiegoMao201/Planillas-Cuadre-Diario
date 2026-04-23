@@ -177,6 +177,10 @@ def initialize_access_state() -> None:
         "access_role": "guest",
         "authenticated": False,
         "last_access_error": "",
+        "store_profile_key": "",
+        "store_profile_label": "",
+        "authorized_store": "",
+        "authorized_series": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -222,10 +226,91 @@ def has_access(required_role: str) -> bool:
     if role == "admin":
         return True
     if required_role == "operations":
-        return role == "operations"
+        return role in {"operations", "store"}
     if required_role == "admin":
         return role == "admin"
     return required_role == "public"
+
+
+def _coerce_secret_string_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def get_store_profiles() -> dict[str, dict[str, object]]:
+    raw_profiles = st.secrets.get("store_profiles", {})
+    if not hasattr(raw_profiles, "items"):
+        return {}
+
+    profiles: dict[str, dict[str, object]] = {}
+    for profile_key, raw_profile in raw_profiles.items():
+        profile_data = dict(raw_profile) if hasattr(raw_profile, "items") else {}
+        store_name = str(profile_data.get("tienda") or profile_data.get("store") or "").strip()
+        hashed_password = str(
+            profile_data.get("hashed_password") or profile_data.get("password_hash") or ""
+        ).strip()
+        profile_label = str(
+            profile_data.get("label") or profile_data.get("nombre") or store_name or profile_key
+        ).strip()
+        allowed_series = _coerce_secret_string_list(
+            profile_data.get("series") or profile_data.get("serie")
+        )
+
+        if not store_name or not hashed_password:
+            continue
+
+        profiles[str(profile_key)] = {
+            "key": str(profile_key),
+            "label": profile_label,
+            "store": store_name,
+            "hashed_password": hashed_password,
+            "series": allowed_series,
+        }
+
+    return profiles
+
+
+def current_authorized_store() -> str:
+    initialize_access_state()
+    return str(st.session_state.get("authorized_store", "")).strip()
+
+
+def current_authorized_series() -> list[str]:
+    initialize_access_state()
+    series = st.session_state.get("authorized_series", [])
+    return _coerce_secret_string_list(series)
+
+
+def is_store_profile_active() -> bool:
+    return current_role() == "store" and bool(current_authorized_store())
+
+
+def filter_stores_for_access(store_options: list[str]) -> list[str]:
+    authorized_store = current_authorized_store()
+    if not is_store_profile_active() or not authorized_store:
+        return store_options
+
+    filtered = [store for store in store_options if str(store).strip() == authorized_store]
+    return filtered or [authorized_store]
+
+
+def filter_series_for_access(series_options: list[str]) -> list[str]:
+    allowed_series = current_authorized_series()
+    if not is_store_profile_active() or not allowed_series:
+        return series_options
+
+    filtered = [series for series in series_options if str(series).strip() in allowed_series]
+    return filtered or allowed_series
+
+
+def get_receipt_series_options() -> list[str]:
+    configured_series = _coerce_secret_string_list(st.secrets.get("receipt_series", []))
+    if configured_series:
+        return configured_series
+    return ["189U", "157U", "156U"]
 
 
 def _get_secret_hash(role: str) -> str:
@@ -249,6 +334,30 @@ def login_with_password(role: str, password: str) -> tuple[bool, str]:
     st.session_state["access_role"] = role
     st.session_state["authenticated"] = True
     st.session_state["last_access_error"] = ""
+    st.session_state["store_profile_key"] = ""
+    st.session_state["store_profile_label"] = ""
+    st.session_state["authorized_store"] = ""
+    st.session_state["authorized_series"] = []
+    return True, ""
+
+
+def login_store_profile(profile_key: str, password: str) -> tuple[bool, str]:
+    profiles = get_store_profiles()
+    profile = profiles.get(profile_key)
+    if not profile:
+        return False, "No se encontro el perfil de tienda configurado."
+
+    hashed_input = hashlib.sha256(password.encode()).hexdigest()
+    if hashed_input != profile["hashed_password"]:
+        return False, "La clave ingresada es incorrecta."
+
+    st.session_state["access_role"] = "store"
+    st.session_state["authenticated"] = True
+    st.session_state["last_access_error"] = ""
+    st.session_state["store_profile_key"] = profile["key"]
+    st.session_state["store_profile_label"] = profile["label"]
+    st.session_state["authorized_store"] = profile["store"]
+    st.session_state["authorized_series"] = profile["series"]
     return True, ""
 
 
@@ -256,9 +365,21 @@ def logout() -> None:
     st.session_state["access_role"] = "guest"
     st.session_state["authenticated"] = False
     st.session_state["last_access_error"] = ""
+    st.session_state["store_profile_key"] = ""
+    st.session_state["store_profile_label"] = ""
+    st.session_state["authorized_store"] = ""
+    st.session_state["authorized_series"] = []
 
 
-AUTH_SESSION_KEYS = ["authenticated", "access_role", "last_access_error"]
+AUTH_SESSION_KEYS = [
+    "authenticated",
+    "access_role",
+    "last_access_error",
+    "store_profile_key",
+    "store_profile_label",
+    "authorized_store",
+    "authorized_series",
+]
 
 
 def reset_session_state(*preserved_keys: str) -> None:
@@ -347,6 +468,7 @@ def resolve_employee_master_path() -> Path:
 
 def render_sidebar(active_label: str) -> None:
     initialize_access_state()
+    store_profiles = get_store_profiles()
     with st.sidebar:
         if LOGO_PATH.exists():
             st.image(str(LOGO_PATH), width=170)
@@ -368,6 +490,26 @@ def render_sidebar(active_label: str) -> None:
 
         if current_role() == "guest":
             with st.expander("Ingresar con clave", expanded=False):
+                if store_profiles:
+                    profile_options = list(store_profiles.keys())
+                    selected_profile_key = st.selectbox(
+                        "Perfil de tienda",
+                        options=profile_options,
+                        format_func=lambda key: str(store_profiles[key]["label"]),
+                        key="sidebar_store_profile_key",
+                    )
+                    with st.form("sidebar_login_store_profile"):
+                        profile_password = st.text_input("Clave de la tienda", type="password")
+                        profile_submit = st.form_submit_button(
+                            "Entrar a mi tienda",
+                            use_container_width=True,
+                        )
+                        if profile_submit:
+                            ok, message = login_store_profile(selected_profile_key, profile_password)
+                            if ok:
+                                st.rerun()
+                            st.error(message)
+
                 with st.form("sidebar_login_operations"):
                     ops_password = st.text_input("Clave operaciones", type="password")
                     ops_submit = st.form_submit_button("Entrar a caja y viaticos", use_container_width=True)
@@ -386,7 +528,13 @@ def render_sidebar(active_label: str) -> None:
                             st.rerun()
                         st.error(message)
         else:
-            role_label = "Administrador" if current_role() == "admin" else "Operaciones"
+            if current_role() == "admin":
+                role_label = "Administrador"
+            elif current_role() == "store":
+                profile_label = st.session_state.get("store_profile_label") or current_authorized_store()
+                role_label = f"Tienda: {profile_label}"
+            else:
+                role_label = "Operaciones"
             st.success(f"Acceso activo: {role_label}")
             if st.button("Cerrar sesion", use_container_width=True):
                 logout()
@@ -397,6 +545,8 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
     initialize_access_state()
     if has_access(required_role):
         return
+
+    store_profiles = get_store_profiles()
 
     inject_shared_css()
     render_brand_header(page_title, description)
@@ -413,9 +563,32 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
     )
 
     st.write("")
-    access_cols = st.columns([1.25, 1.25, 1.1])
+    if store_profiles:
+        access_cols = st.columns([1.15, 1.15, 1.15, 1.0])
+    else:
+        access_cols = st.columns([1.25, 1.25, 1.1])
 
-    with access_cols[0]:
+    current_col = 0
+    if store_profiles:
+        with access_cols[current_col]:
+            st.markdown("#### Perfil por tienda")
+            selected_profile_key = st.selectbox(
+                "Perfil autorizado",
+                options=list(store_profiles.keys()),
+                format_func=lambda key: str(store_profiles[key]["label"]),
+                key=f"portal_store_profile_{page_title}",
+            )
+            with st.form(f"portal_login_store_{page_title}"):
+                password = st.text_input("Ingrese la clave de la tienda", type="password")
+                submitted = st.form_submit_button("Habilitar mi tienda", use_container_width=True)
+                if submitted:
+                    ok, message = login_store_profile(selected_profile_key, password)
+                    if ok:
+                        st.rerun()
+                    st.error(message)
+        current_col += 1
+
+    with access_cols[current_col]:
         st.markdown("#### Clave de operaciones")
         with st.form(f"portal_login_operations_{page_title}"):
             password = st.text_input("Ingrese la clave de caja / viaticos", type="password")
@@ -426,7 +599,7 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.rerun()
                 st.error(message)
 
-    with access_cols[1]:
+    with access_cols[current_col + 1]:
         st.markdown("#### Clave administrativa")
         with st.form(f"portal_login_admin_{page_title}"):
             password = st.text_input("Ingrese la clave administrativa", type="password")
@@ -437,7 +610,7 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.rerun()
                 st.error(message)
 
-    with access_cols[2]:
+    with access_cols[current_col + 2]:
         st.markdown("#### Acceso empleados")
         st.page_link(SOLICITUD_PAGE, label="Abrir formulario de solicitud", icon="📝")
         st.caption("Este acceso se mantiene publico para que el empleado solo vea su formato.")

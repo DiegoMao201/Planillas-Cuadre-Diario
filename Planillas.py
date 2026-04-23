@@ -16,7 +16,14 @@ from openpyxl.utils import get_column_letter
 import yagmail
 import smtplib
 
-from app_shared import initialize_access_state, render_sidebar, require_access
+from app_shared import (
+    current_authorized_store,
+    filter_stores_for_access,
+    initialize_access_state,
+    is_store_profile_active,
+    render_sidebar,
+    require_access,
+)
 
 # --- 1. CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Cuadre Diario de Caja")
@@ -641,8 +648,22 @@ def clear_form_state():
     fecha = st.session_state.get('fecha_seleccionada', datetime.now().date())
     auth_status = st.session_state.get('authenticated', False)
     access_role = st.session_state.get('access_role', 'guest')
+    store_profile_key = st.session_state.get('store_profile_key', '')
+    store_profile_label = st.session_state.get('store_profile_label', '')
+    authorized_store = st.session_state.get('authorized_store', '')
+    authorized_series = st.session_state.get('authorized_series', [])
     
-    keys_to_keep = ['page', 'tienda_seleccionada', 'fecha_seleccionada', 'authenticated', 'access_role']
+    keys_to_keep = [
+        'page',
+        'tienda_seleccionada',
+        'fecha_seleccionada',
+        'authenticated',
+        'access_role',
+        'store_profile_key',
+        'store_profile_label',
+        'authorized_store',
+        'authorized_series',
+    ]
     for key in list(st.session_state.keys()):
         if key not in keys_to_keep:
             del st.session_state[key]
@@ -652,6 +673,10 @@ def clear_form_state():
     st.session_state.fecha_seleccionada = fecha
     st.session_state.authenticated = auth_status
     st.session_state.access_role = access_role
+    st.session_state.store_profile_key = store_profile_key
+    st.session_state.store_profile_label = store_profile_label
+    st.session_state.authorized_store = authorized_store
+    st.session_state.authorized_series = authorized_series
 
 # --- 5. COMPONENTES DE LA INTERFAZ DE USUARIO ---
 def format_currency(num):
@@ -930,10 +955,26 @@ def render_form_page(worksheets, config):
     """Renderiza la página del formulario principal."""
     registros_ws, _, _, _ = worksheets
     tiendas, bancos, terceros = config
+    allowed_tiendas = filter_stores_for_access(tiendas)
+    store_locked = is_store_profile_active()
+
+    if not allowed_tiendas:
+        st.error("🚨 El perfil actual no tiene una tienda válida configurada.")
+        return
+
+    if st.session_state.get('tienda_seleccionada') not in allowed_tiendas:
+        st.session_state.tienda_seleccionada = current_authorized_store() if store_locked else allowed_tiendas[0]
     
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
     c1,c2,c3,c4 = st.columns([2,2,1,1])
-    c1.selectbox("Tienda", options=tiendas, key="tienda_seleccionada", on_change=clear_form_state, placeholder="Seleccione una tienda...")
+    c1.selectbox(
+        "Tienda",
+        options=allowed_tiendas,
+        key="tienda_seleccionada",
+        on_change=clear_form_state,
+        placeholder="Seleccione una tienda...",
+        disabled=store_locked,
+    )
     c2.date_input("Fecha", key="fecha_seleccionada", on_change=clear_form_state, format="DD/MM/YYYY")
     with c3:
         st.write(" ")
@@ -941,6 +982,9 @@ def render_form_page(worksheets, config):
     with c4:
         st.write(" ")
         st.button("✨ Iniciar Nuevo", on_click=clear_form_state, use_container_width=True)
+
+    if store_locked:
+        st.caption(f"Perfil restringido a la tienda: {current_authorized_store()}")
 
     st.divider()
     st.header("2. Formulario de Cuadre", anchor=False, divider="rainbow")
@@ -968,10 +1012,20 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
 
     today = datetime.now().date()
     col1, col2, col3 = st.columns(3)
-    tienda_options = ["Todas las Tiendas"] + tiendas_list
-    selected_store = col1.selectbox("Tienda", options=tienda_options)
+    allowed_tiendas = filter_stores_for_access(tiendas_list)
+    store_locked = is_store_profile_active()
+
+    if not allowed_tiendas:
+        st.error("🚨 El perfil actual no tiene una tienda válida configurada.")
+        return
+
+    tienda_options = allowed_tiendas if store_locked else ["Todas las Tiendas"] + allowed_tiendas
+    selected_store = col1.selectbox("Tienda", options=tienda_options, disabled=store_locked)
     start_date = col2.date_input("Fecha de Inicio", today.replace(day=1))
     end_date = col3.date_input("Fecha de Fin", today)
+
+    if store_locked:
+        st.caption(f"Perfil restringido a la tienda: {current_authorized_store()}")
 
     if start_date > end_date:
         st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin.")

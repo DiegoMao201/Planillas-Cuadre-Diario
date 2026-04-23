@@ -16,7 +16,16 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-from app_shared import initialize_access_state, render_sidebar, require_access, reset_session_state
+from app_shared import (
+    current_authorized_series,
+    filter_series_for_access,
+    get_receipt_series_options,
+    initialize_access_state,
+    is_store_profile_active,
+    render_sidebar,
+    require_access,
+    reset_session_state,
+)
 
 # --- CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT ---
 # Configura la página para que use un layout ancho y tenga un título.
@@ -517,7 +526,12 @@ with tab1:
         bancos, terceros, account_mappings, tarjetas_destinos = get_app_config(config_ws)
         opciones_destino = ["-- Seleccionar --"] + bancos + terceros + tarjetas_destinos
         opciones_agrupacion = list(range(1, 11))
-        series_disponibles = ["189U", "157U", "156U"]
+        series_disponibles = filter_series_for_access(get_receipt_series_options())
+        store_series_locked = is_store_profile_active() and bool(current_authorized_series())
+
+        if not series_disponibles:
+            st.error("El perfil actual no tiene una serie autorizada configurada.")
+            st.stop()
         
         # Inicializa el estado de la sesión si no existe.
         if 'mode' not in st.session_state:
@@ -538,7 +552,15 @@ with tab1:
             with dl_col2:
                 end_date = st.date_input("Fecha de fin:", datetime.now().date(), key="dl_end_date")
             with dl_col3:
-                download_serie = st.selectbox("Serie a buscar:", options=series_disponibles, key="dl_serie")
+                download_serie = st.selectbox(
+                    "Serie a buscar:",
+                    options=series_disponibles,
+                    key="dl_serie",
+                    disabled=store_series_locked,
+                )
+
+            if store_series_locked:
+                st.caption(f"Perfil restringido a la serie: {', '.join(series_disponibles)}")
             
             if st.button("Buscar y Preparar Reporte Consolidado", use_container_width=True):
                 if end_date < start_date:
@@ -646,7 +668,15 @@ with tab1:
                 with search_col2:
                     search_end_date = st.date_input("Fecha de fin:", datetime.now().date(), key="edit_end_date")
                 with search_col3:
-                    search_serie = st.selectbox("Serie de los recibos:", options=series_disponibles, key="search_serie")
+                    search_serie = st.selectbox(
+                        "Serie de los recibos:",
+                        options=series_disponibles,
+                        key="search_serie",
+                        disabled=store_series_locked,
+                    )
+
+                if store_series_locked:
+                    st.caption(f"Perfil restringido a la serie: {', '.join(series_disponibles)}")
                 
                 if st.button("Cargar Registros para Editar", use_container_width=True, type="primary"):
                     if search_end_date < search_start_date:
@@ -730,8 +760,14 @@ with tab1:
                 st.markdown("##### A. Selecciona la Serie del Documento")
                 serie_seleccionada = st.selectbox(
                     "Elige la serie que corresponde a los recibos de este archivo:",
-                    options=series_disponibles, index=0, key="new_serie_select"
+                    options=series_disponibles,
+                    index=0,
+                    key="new_serie_select",
+                    disabled=store_series_locked,
                 )
+
+                if store_series_locked:
+                    st.caption(f"Perfil restringido a la serie: {', '.join(series_disponibles)}")
                 
                 st.markdown("##### B. Carga el Archivo de Excel")
                 uploaded_file = st.file_uploader(
