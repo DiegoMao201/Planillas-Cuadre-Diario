@@ -252,6 +252,9 @@ def get_store_profiles() -> dict[str, dict[str, object]]:
         hashed_password = str(
             profile_data.get("hashed_password") or profile_data.get("password_hash") or ""
         ).strip()
+        plain_password = str(
+            profile_data.get("password") or profile_data.get("plain_password") or ""
+        ).strip()
         profile_label = str(
             profile_data.get("label") or profile_data.get("nombre") or store_name or profile_key
         ).strip()
@@ -259,7 +262,7 @@ def get_store_profiles() -> dict[str, dict[str, object]]:
             profile_data.get("series") or profile_data.get("serie")
         )
 
-        if not store_name or not hashed_password:
+        if not store_name or (not hashed_password and not plain_password):
             continue
 
         profiles[str(profile_key)] = {
@@ -267,6 +270,7 @@ def get_store_profiles() -> dict[str, dict[str, object]]:
             "label": profile_label,
             "store": store_name,
             "hashed_password": hashed_password,
+            "plain_password": plain_password,
             "series": allowed_series,
         }
 
@@ -348,7 +352,9 @@ def login_store_profile(profile_key: str, password: str) -> tuple[bool, str]:
         return False, "No se encontro el perfil de tienda configurado."
 
     hashed_input = hashlib.sha256(password.encode()).hexdigest()
-    if hashed_input != profile["hashed_password"]:
+    matches_hash = bool(profile.get("hashed_password")) and hashed_input == profile["hashed_password"]
+    matches_plain = bool(profile.get("plain_password")) and password == profile["plain_password"]
+    if not matches_hash and not matches_plain:
         return False, "La clave ingresada es incorrecta."
 
     st.session_state["access_role"] = "store"
