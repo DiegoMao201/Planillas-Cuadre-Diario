@@ -584,7 +584,7 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.error(message)
         current_col += 1
 
-    with access_cols[current_col + 1]:
+    with access_cols[current_col]:
         st.markdown("#### Clave administrativa")
         with st.form(f"portal_login_admin_{page_title}"):
             password = st.text_input("Ingrese la clave administrativa", type="password")
@@ -595,7 +595,7 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.rerun()
                 st.error(message)
 
-    with access_cols[current_col + 2 if store_profiles else current_col]:
+    with access_cols[current_col + 1]:
         st.markdown("#### Acceso empleados")
         st.page_link(SOLICITUD_PAGE, label="Abrir formulario de solicitud", icon="📝")
         st.caption("Este acceso se mantiene publico para que el empleado solo vea su formato.")
