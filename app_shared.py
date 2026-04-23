@@ -225,8 +225,8 @@ def has_access(required_role: str) -> bool:
     role = current_role()
     if role == "admin":
         return True
-    if required_role == "operations":
-        return role in {"operations", "store"}
+    if required_role == "store":
+        return role == "store"
     if required_role == "admin":
         return role == "admin"
     return required_role == "public"
@@ -319,14 +319,15 @@ def get_receipt_series_options() -> list[str]:
 
 def _get_secret_hash(role: str) -> str:
     credentials = st.secrets.get("credentials", {})
-    if role == "operations":
-        return credentials.get("operations_hashed_password") or credentials.get("hashed_password") or ""
     if role == "admin":
         return credentials.get("admin_hashed_password") or ""
     return ""
 
 
 def login_with_password(role: str, password: str) -> tuple[bool, str]:
+    if role != "admin":
+        return False, "Ese tipo de acceso ya no esta habilitado. Use su perfil de tienda o la clave administrativa."
+
     expected_hash = _get_secret_hash(role)
     if not expected_hash:
         return False, f"No se encontro la clave configurada para el rol {role}."
@@ -481,8 +482,8 @@ def render_sidebar(active_label: str) -> None:
         st.markdown("### Accesos")
         st.page_link(SOLICITUD_PAGE, label="Solicitud de permisos", icon="📝")
 
-        if has_access("operations"):
-            st.markdown("### Operaciones")
+        if has_access("store"):
+            st.markdown("### Mi tienda")
             st.page_link(MAIN_PAGE, label="Cuadre diario", icon="💵")
             st.page_link(RECIBOS_PAGE, label="Recibos de caja", icon="🧾")
 
@@ -516,15 +517,6 @@ def render_sidebar(active_label: str) -> None:
                                 st.rerun()
                             st.error(message)
 
-                with st.form("sidebar_login_operations"):
-                    ops_password = st.text_input("Clave operaciones", type="password")
-                    ops_submit = st.form_submit_button("Entrar a caja y viaticos", use_container_width=True)
-                    if ops_submit:
-                        ok, message = login_with_password("operations", ops_password)
-                        if ok:
-                            st.rerun()
-                        st.error(message)
-
                 with st.form("sidebar_login_admin"):
                     admin_password = st.text_input("Clave administracion", type="password")
                     admin_submit = st.form_submit_button("Entrar a reportes y aprobacion", use_container_width=True)
@@ -539,8 +531,6 @@ def render_sidebar(active_label: str) -> None:
             elif current_role() == "store":
                 profile_label = st.session_state.get("store_profile_label") or current_authorized_store()
                 role_label = f"Tienda: {profile_label}"
-            else:
-                role_label = "Operaciones"
             st.success(f"Acceso activo: {role_label}")
             if st.button("Cerrar sesion", use_container_width=True):
                 logout()
@@ -570,9 +560,9 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
 
     st.write("")
     if store_profiles:
-        access_cols = st.columns([1.15, 1.15, 1.15, 1.0])
+        access_cols = st.columns([1.35, 1.15, 1.0])
     else:
-        access_cols = st.columns([1.25, 1.25, 1.1])
+        access_cols = st.columns([1.25, 1.1])
 
     current_col = 0
     if store_profiles:
@@ -594,17 +584,6 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.error(message)
         current_col += 1
 
-    with access_cols[current_col]:
-        st.markdown("#### Clave de operaciones")
-        with st.form(f"portal_login_operations_{page_title}"):
-            password = st.text_input("Ingrese la clave de caja / viaticos", type="password")
-            submitted = st.form_submit_button("Habilitar menu operativo", use_container_width=True)
-            if submitted:
-                ok, message = login_with_password("operations", password)
-                if ok:
-                    st.rerun()
-                st.error(message)
-
     with access_cols[current_col + 1]:
         st.markdown("#### Clave administrativa")
         with st.form(f"portal_login_admin_{page_title}"):
@@ -616,7 +595,7 @@ def require_access(required_role: str, page_title: str, description: str) -> Non
                     st.rerun()
                 st.error(message)
 
-    with access_cols[current_col + 2]:
+    with access_cols[current_col + 2 if store_profiles else current_col]:
         st.markdown("#### Acceso empleados")
         st.page_link(SOLICITUD_PAGE, label="Abrir formulario de solicitud", icon="📝")
         st.caption("Este acceso se mantiene publico para que el empleado solo vea su formato.")

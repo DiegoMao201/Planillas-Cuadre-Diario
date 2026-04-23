@@ -32,9 +32,9 @@ from app_shared import (
 st.set_page_config(layout="wide", page_title="Recibos de Caja")
 initialize_access_state()
 require_access(
-    "operations",
+    "store",
     "Recibos de caja",
-    "Este modulo hace parte del acceso operativo y administrativo controlado por clave.",
+    "Este modulo requiere perfil de tienda o acceso administrativo.",
 )
 render_sidebar("Recibos de caja")
 

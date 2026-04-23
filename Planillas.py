@@ -1119,8 +1119,8 @@ if __name__ == "__main__":
     initialize_session_state()
     initialize_access_state()
     require_access(
-        "operations",
+        "store",
         "Cuadre diario de caja",
-        "Este modulo sigue protegido por la clave operativa. Los empleados solo ven el formulario abierto de solicitudes.",
+        "Este modulo requiere perfil de tienda o acceso administrativo. Los empleados solo ven el formulario abierto de solicitudes.",
     )
     main()
