@@ -262,7 +262,7 @@ def get_store_profiles() -> dict[str, dict[str, object]]:
             profile_data.get("series") or profile_data.get("serie")
         )
 
-        if not store_name or (not hashed_password and not plain_password):
+        if (not store_name and not allowed_series) or (not hashed_password and not plain_password):
             continue
 
         profiles[str(profile_key)] = {
@@ -289,12 +289,26 @@ def current_authorized_series() -> list[str]:
 
 
 def is_store_profile_active() -> bool:
-    return current_role() == "store" and bool(current_authorized_store())
+    return current_role() == "store" and bool(
+        current_authorized_store() or current_authorized_series()
+    )
 
 
 def filter_stores_for_access(store_options: list[str]) -> list[str]:
+    allowed_series = current_authorized_series()
     authorized_store = current_authorized_store()
-    if not is_store_profile_active() or not authorized_store:
+    if not is_store_profile_active():
+        return store_options
+
+    if allowed_series:
+        filtered_by_series = [
+            store for store in store_options if str(store).strip() in allowed_series
+        ]
+        if filtered_by_series:
+            return filtered_by_series
+        return allowed_series
+
+    if not authorized_store:
         return store_options
 
     filtered = [store for store in store_options if str(store).strip() == authorized_store]
@@ -358,13 +372,16 @@ def login_store_profile(profile_key: str, password: str) -> tuple[bool, str]:
     if not matches_hash and not matches_plain:
         return False, "La clave ingresada es incorrecta."
 
+    allowed_series = _coerce_secret_string_list(profile.get("series"))
+    authorized_store = "" if allowed_series else str(profile.get("store") or "").strip()
+
     st.session_state["access_role"] = "store"
     st.session_state["authenticated"] = True
     st.session_state["last_access_error"] = ""
     st.session_state["store_profile_key"] = profile["key"]
     st.session_state["store_profile_label"] = profile["label"]
-    st.session_state["authorized_store"] = profile["store"]
-    st.session_state["authorized_series"] = profile["series"]
+    st.session_state["authorized_store"] = authorized_store
+    st.session_state["authorized_series"] = allowed_series
     return True, ""
 
 

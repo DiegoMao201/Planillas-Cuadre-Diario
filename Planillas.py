@@ -963,7 +963,9 @@ def render_form_page(worksheets, config):
         return
 
     if st.session_state.get('tienda_seleccionada') not in allowed_tiendas:
-        st.session_state.tienda_seleccionada = current_authorized_store() if store_locked else allowed_tiendas[0]
+        authorized_store = current_authorized_store()
+        default_store = authorized_store if store_locked and authorized_store in allowed_tiendas else allowed_tiendas[0]
+        st.session_state.tienda_seleccionada = default_store
     
     st.header("1. Selección de Registro", anchor=False, divider="rainbow")
     c1,c2,c3,c4 = st.columns([2,2,1,1])
@@ -984,7 +986,7 @@ def render_form_page(worksheets, config):
         st.button("✨ Iniciar Nuevo", on_click=clear_form_state, use_container_width=True)
 
     if store_locked:
-        st.caption(f"Perfil restringido a la tienda: {current_authorized_store()}")
+        st.caption(f"Perfil restringido a la serie: {', '.join(allowed_tiendas)}")
 
     st.divider()
     st.header("2. Formulario de Cuadre", anchor=False, divider="rainbow")
@@ -1025,7 +1027,7 @@ def render_reports_page(registros_ws, config_ws, tiendas_list):
     end_date = col3.date_input("Fecha de Fin", today)
 
     if store_locked:
-        st.caption(f"Perfil restringido a la tienda: {current_authorized_store()}")
+        st.caption(f"Perfil restringido a la serie: {', '.join(allowed_tiendas)}")
 
     if start_date > end_date:
         st.error("Error: La fecha de inicio no puede ser posterior a la fecha de fin.")
