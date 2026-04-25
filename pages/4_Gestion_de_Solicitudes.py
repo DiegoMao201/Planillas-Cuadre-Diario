@@ -19,6 +19,7 @@ from app_shared import (
     format_colombia_timestamp,
     get_auxiliary_records,
     get_request_records,
+    load_solicitudes_management_data,
     get_solicitudes_worksheets,
     inject_shared_css,
     initialize_access_state,
@@ -516,9 +517,10 @@ def main() -> None:
     )
 
     worksheets = get_solicitudes_worksheets()
-    df = prepare_request_dataframe(get_request_records(worksheets["registros"]))
-    novedades_df = get_auxiliary_records(worksheets["novedades"], NOVEDADES_HEADERS)
-    audit_df = get_auxiliary_records(worksheets["auditoria"], AUDIT_HEADERS)
+    management_data = load_solicitudes_management_data()
+    df = prepare_request_dataframe(management_data["requests"])
+    novedades_df = management_data["novedades"]
+    audit_df = management_data["audit"]
     refresh_management_report(worksheets["reporte"], df)
 
     if df.empty:

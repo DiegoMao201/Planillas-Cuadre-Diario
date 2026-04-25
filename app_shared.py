@@ -8,6 +8,7 @@ import html
 import os
 import re
 import smtplib
+import time
 import unicodedata
 from zoneinfo import ZoneInfo
 
@@ -36,6 +37,10 @@ SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
 DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
+GOOGLE_SHEETS_RETRY_ATTEMPTS = 4
+GOOGLE_SHEETS_RETRY_BASE_SECONDS = 0.8
+SOLICITUDES_READ_CACHE_TTL_SECONDS = 120
+SOLICITUDES_REPORT_SYNC_COOLDOWN_SECONDS = 180
 
 REQUEST_REASONS = [
     {
@@ -681,38 +686,151 @@ def connect_to_base_spreadsheet():
     return spreadsheet
 
 
-def _ensure_headers(worksheet, headers: list[str]) -> None:
-    current_headers = worksheet.row_values(1)
-    if current_headers == headers:
-        return
+def _run_gspread_call(action: str, operation, *args, **kwargs):
+    last_error: Exception | None = None
+    for attempt in range(GOOGLE_SHEETS_RETRY_ATTEMPTS):
+        try:
+            return operation(*args, **kwargs)
+        except gspread.exceptions.WorksheetNotFound:
+            raise
+        except Exception as error:
+            last_error = error
+            if attempt == GOOGLE_SHEETS_RETRY_ATTEMPTS - 1:
+                break
+            time.sleep(GOOGLE_SHEETS_RETRY_BASE_SECONDS * (2 ** attempt))
 
-    all_values = worksheet.get_all_values()
-    if len(all_values) <= 1 and (not current_headers or all(not value for value in current_headers)):
-        worksheet.update("A1", [headers])
+    raise RuntimeError(
+        f"No fue posible {action} en Google Sheets tras varios intentos."
+    ) from last_error
 
 
-def _ensure_worksheet(spreadsheet, title: str, headers: list[str], rows: int = 2000):
-    try:
-        worksheet = spreadsheet.worksheet(title)
-    except gspread.exceptions.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=title, rows=rows, cols=max(26, len(headers) + 5))
-        worksheet.update("A1", [headers])
+def _column_letter(column_number: int) -> str:
+    result = ""
+    current = max(1, int(column_number))
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _sheet_range(title: str, cell_range: str) -> str:
+    return f"'{title.replace("'", "''")}'!{cell_range}"
+
+
+def _worksheet_has_content(rows: list[list[object]]) -> bool:
+    return any(any(str(cell).strip() for cell in row) for row in rows)
+
+
+def _get_existing_worksheets(spreadsheet) -> dict[str, object]:
+    worksheets = _run_gspread_call("listar hojas", spreadsheet.worksheets)
+    return {worksheet.title: worksheet for worksheet in worksheets}
+
+
+def _ensure_worksheet_exists(
+    spreadsheet,
+    existing_worksheets: dict[str, object],
+    title: str,
+    headers: list[str],
+    rows: int = 2000,
+):
+    worksheet = existing_worksheets.get(title)
+    if worksheet is not None:
         return worksheet
 
-    _ensure_headers(worksheet, headers)
+    worksheet = _run_gspread_call(
+        f"crear la hoja {title}",
+        spreadsheet.add_worksheet,
+        title=title,
+        rows=rows,
+        cols=max(26, len(headers) + 5),
+    )
+    _run_gspread_call(
+        f"escribir encabezados en {title}",
+        worksheet.update,
+        "A1",
+        [headers],
+    )
+    existing_worksheets[title] = worksheet
     return worksheet
 
 
+def _get_sheet_previews(spreadsheet, sheet_titles: list[str]) -> dict[str, list[list[str]]]:
+    response = _run_gspread_call(
+        "leer encabezados de solicitudes",
+        spreadsheet.values_batch_get,
+        [_sheet_range(title, "1:2") for title in sheet_titles],
+    )
+    value_ranges = response.get("valueRanges", []) if isinstance(response, dict) else []
+
+    previews: dict[str, list[list[str]]] = {}
+    for title, value_range in zip(sheet_titles, value_ranges):
+        previews[title] = value_range.get("values", []) or []
+    for title in sheet_titles:
+        previews.setdefault(title, [])
+    return previews
+
+
+def _ensure_sheet_bootstrap(worksheets: dict[str, object], previews: dict[str, list[list[str]]]) -> None:
+    sheet_specs = {
+        "Solicitudes_Registros": REQUEST_HEADERS,
+        "Solicitudes_Novedades": NOVEDADES_HEADERS,
+        "Solicitudes_Auditoria": AUDIT_HEADERS,
+        "Solicitudes_Parametros": PARAMETERS_HEADERS,
+        "Solicitudes_Reporte_Gerencia": REPORT_HEADERS,
+    }
+
+    for title, headers in sheet_specs.items():
+        preview_rows = previews.get(title, [])
+        current_headers = preview_rows[0] if preview_rows else []
+        has_data_rows = _worksheet_has_content(preview_rows[1:])
+        if current_headers == headers:
+            continue
+        if (not current_headers or not _worksheet_has_content([current_headers])) and not has_data_rows:
+            _run_gspread_call(
+                f"asegurar encabezados en {title}",
+                worksheets[title].update,
+                "A1",
+                [headers],
+            )
+
+    parameter_rows = previews.get("Solicitudes_Parametros", [])
+    if not _worksheet_has_content(parameter_rows[1:]):
+        _run_gspread_call(
+            "precargar parametros de solicitudes",
+            worksheets["Solicitudes_Parametros"].append_rows,
+            DEFAULT_PARAMETER_ROWS,
+        )
+
+
+@st.cache_resource(ttl=600)
 def get_solicitudes_worksheets() -> dict[str, object]:
     spreadsheet = connect_to_base_spreadsheet()
-    registros_ws = _ensure_worksheet(spreadsheet, "Solicitudes_Registros", REQUEST_HEADERS, rows=5000)
-    novedades_ws = _ensure_worksheet(spreadsheet, "Solicitudes_Novedades", NOVEDADES_HEADERS, rows=5000)
-    auditoria_ws = _ensure_worksheet(spreadsheet, "Solicitudes_Auditoria", AUDIT_HEADERS, rows=5000)
-    parametros_ws = _ensure_worksheet(spreadsheet, "Solicitudes_Parametros", PARAMETERS_HEADERS, rows=200)
-    reporte_ws = _ensure_worksheet(spreadsheet, "Solicitudes_Reporte_Gerencia", REPORT_HEADERS, rows=3000)
+    existing_worksheets = _get_existing_worksheets(spreadsheet)
+    registros_ws = _ensure_worksheet_exists(spreadsheet, existing_worksheets, "Solicitudes_Registros", REQUEST_HEADERS, rows=5000)
+    novedades_ws = _ensure_worksheet_exists(spreadsheet, existing_worksheets, "Solicitudes_Novedades", NOVEDADES_HEADERS, rows=5000)
+    auditoria_ws = _ensure_worksheet_exists(spreadsheet, existing_worksheets, "Solicitudes_Auditoria", AUDIT_HEADERS, rows=5000)
+    parametros_ws = _ensure_worksheet_exists(spreadsheet, existing_worksheets, "Solicitudes_Parametros", PARAMETERS_HEADERS, rows=200)
+    reporte_ws = _ensure_worksheet_exists(spreadsheet, existing_worksheets, "Solicitudes_Reporte_Gerencia", REPORT_HEADERS, rows=3000)
 
-    if len(parametros_ws.get_all_values()) <= 1:
-        parametros_ws.append_rows(DEFAULT_PARAMETER_ROWS)
+    _ensure_sheet_bootstrap(
+        {
+            "Solicitudes_Registros": registros_ws,
+            "Solicitudes_Novedades": novedades_ws,
+            "Solicitudes_Auditoria": auditoria_ws,
+            "Solicitudes_Parametros": parametros_ws,
+            "Solicitudes_Reporte_Gerencia": reporte_ws,
+        },
+        _get_sheet_previews(
+            spreadsheet,
+            [
+                "Solicitudes_Registros",
+                "Solicitudes_Novedades",
+                "Solicitudes_Auditoria",
+                "Solicitudes_Parametros",
+                "Solicitudes_Reporte_Gerencia",
+            ],
+        ),
+    )
 
     return {
         "spreadsheet": spreadsheet,
@@ -841,13 +959,36 @@ def _approval_review_url() -> str:
     return links.get("permissions_review_url", DEFAULT_APPROVAL_URL)
 
 
+def invalidate_solicitudes_cache() -> None:
+    load_solicitudes_management_data.clear()
+    st.session_state["solicitudes_report_needs_sync"] = True
+    st.session_state.pop("solicitudes_report_signature", None)
+    st.session_state.pop("solicitudes_report_synced_at", None)
+
+
 def append_request_record(worksheet, record: dict[str, object]) -> None:
-    worksheet.append_row([_sheet_value(record.get(header, "")) for header in REQUEST_HEADERS])
+    _run_gspread_call(
+        "registrar solicitud",
+        worksheet.append_row,
+        [_sheet_value(record.get(header, "")) for header in REQUEST_HEADERS],
+    )
+    invalidate_solicitudes_cache()
 
 
 def update_request_record(worksheet, request_id: str, record: dict[str, object]) -> None:
-    cell = worksheet.find(request_id, in_column=1)
-    worksheet.update(f"A{cell.row}", [[_sheet_value(record.get(header, "")) for header in REQUEST_HEADERS]])
+    cell = _run_gspread_call(
+        f"ubicar la solicitud {request_id}",
+        worksheet.find,
+        request_id,
+        in_column=1,
+    )
+    _run_gspread_call(
+        f"actualizar la solicitud {request_id}",
+        worksheet.update,
+        f"A{cell.row}",
+        [[_sheet_value(record.get(header, "")) for header in REQUEST_HEADERS]],
+    )
+    invalidate_solicitudes_cache()
 
 
 def append_novedad(worksheet, record: dict[str, str], event_type: str, summary: str, channel: str, responsible: str) -> None:
@@ -865,7 +1006,8 @@ def append_novedad(worksheet, record: dict[str, str], event_type: str, summary: 
         summary,
         channel,
     ]
-    worksheet.append_row(row)
+    _run_gspread_call("registrar novedad", worksheet.append_row, row)
+    invalidate_solicitudes_cache()
 
 
 def append_audit_log(worksheet, request_id: str, action: str, responsible: str, detail: str) -> None:
@@ -877,11 +1019,65 @@ def append_audit_log(worksheet, request_id: str, action: str, responsible: str, 
         responsible,
         detail,
     ]
-    worksheet.append_row(row)
+    _run_gspread_call("registrar auditoria", worksheet.append_row, row)
+    invalidate_solicitudes_cache()
+
+
+def _rows_to_dataframe(values: list[list[str]], expected_headers: list[str]) -> pd.DataFrame:
+    if not values:
+        return pd.DataFrame(columns=expected_headers)
+
+    source_headers = [str(value).strip() for value in values[0]]
+    if not _worksheet_has_content([source_headers]):
+        return pd.DataFrame(columns=expected_headers)
+
+    normalized_rows: list[list[str]] = []
+    header_count = len(source_headers)
+    for row in values[1:]:
+        normalized = [str(value).strip() for value in row[:header_count]]
+        if len(normalized) < header_count:
+            normalized.extend([""] * (header_count - len(normalized)))
+        if _worksheet_has_content([normalized]):
+            normalized_rows.append(normalized)
+
+    if not normalized_rows:
+        return pd.DataFrame(columns=expected_headers)
+
+    df = pd.DataFrame(normalized_rows, columns=source_headers)
+    for header in expected_headers:
+        if header not in df.columns:
+            df[header] = ""
+    return df[expected_headers].copy()
+
+
+@st.cache_data(ttl=SOLICITUDES_READ_CACHE_TTL_SECONDS, show_spinner=False)
+def load_solicitudes_management_data() -> dict[str, pd.DataFrame]:
+    worksheets = get_solicitudes_worksheets()
+    spreadsheet = worksheets["spreadsheet"]
+    response = _run_gspread_call(
+        "leer datos administrativos de solicitudes",
+        spreadsheet.values_batch_get,
+        [
+            _sheet_range("Solicitudes_Registros", f"A:{_column_letter(len(REQUEST_HEADERS))}"),
+            _sheet_range("Solicitudes_Novedades", f"A:{_column_letter(len(NOVEDADES_HEADERS))}"),
+            _sheet_range("Solicitudes_Auditoria", f"A:{_column_letter(len(AUDIT_HEADERS))}"),
+        ],
+    )
+    value_ranges = response.get("valueRanges", []) if isinstance(response, dict) else []
+
+    records_values = value_ranges[0].get("values", []) if len(value_ranges) > 0 else []
+    novedades_values = value_ranges[1].get("values", []) if len(value_ranges) > 1 else []
+    audit_values = value_ranges[2].get("values", []) if len(value_ranges) > 2 else []
+
+    return {
+        "requests": _rows_to_dataframe(records_values, REQUEST_HEADERS),
+        "novedades": _rows_to_dataframe(novedades_values, NOVEDADES_HEADERS),
+        "audit": _rows_to_dataframe(audit_values, AUDIT_HEADERS),
+    }
 
 
 def get_request_records(worksheet) -> pd.DataFrame:
-    records = worksheet.get_all_records()
+    records = _run_gspread_call("leer solicitudes", worksheet.get_all_records)
     if not records:
         return pd.DataFrame(columns=REQUEST_HEADERS)
     df = pd.DataFrame(records)
@@ -892,7 +1088,7 @@ def get_request_records(worksheet) -> pd.DataFrame:
 
 
 def get_auxiliary_records(worksheet, headers: list[str]) -> pd.DataFrame:
-    records = worksheet.get_all_records()
+    records = _run_gspread_call("leer datos auxiliares", worksheet.get_all_records)
     if not records:
         return pd.DataFrame(columns=headers)
     df = pd.DataFrame(records)
@@ -967,10 +1163,34 @@ def _group_report_rows(df: pd.DataFrame, column_name: str, section_name: str, to
     return rows
 
 
-def refresh_management_report(worksheet, df: pd.DataFrame) -> None:
+def refresh_management_report(worksheet, df: pd.DataFrame, force: bool = False) -> bool:
+    report_signature = hashlib.sha256(
+        df[[column for column in ["Solicitud_ID", "Estado", "Ultima_Actualizacion"] if column in df.columns]]
+        .fillna("")
+        .astype(str)
+        .to_csv(index=False)
+        .encode("utf-8")
+    ).hexdigest()
+    now_ts = time.time()
+    last_signature = st.session_state.get("solicitudes_report_signature", "")
+    last_synced_at = float(st.session_state.get("solicitudes_report_synced_at", 0.0) or 0.0)
+    needs_sync = bool(st.session_state.get("solicitudes_report_needs_sync", True))
+
+    if (
+        not force
+        and not needs_sync
+        and report_signature == last_signature
+        and (now_ts - last_synced_at) < SOLICITUDES_REPORT_SYNC_COOLDOWN_SECONDS
+    ):
+        return False
+
     rows = build_management_report_rows(df)
-    worksheet.clear()
-    worksheet.update("A1", rows)
+    _run_gspread_call("limpiar reporte gerencial", worksheet.clear)
+    _run_gspread_call("actualizar reporte gerencial", worksheet.update, "A1", rows)
+    st.session_state["solicitudes_report_signature"] = report_signature
+    st.session_state["solicitudes_report_synced_at"] = now_ts
+    st.session_state["solicitudes_report_needs_sync"] = False
+    return True
 
 
 def _email_settings() -> dict[str, str]:
