@@ -403,14 +403,17 @@ def main() -> None:
     profile = None
     history_record = None
     worksheets = None
+    history_warning = ""
     if cedula:
         try:
             worksheets = get_moto_inspection_worksheets()
             profile = get_moto_profile_by_cedula(worksheets["profiles"], cedula)
             sync_profile_defaults(profile)
         except Exception as error:
-            st.error(f"No se pudo preparar el historial de inspecciones: {error}")
-            return
+            history_warning = (
+                "No se pudo cargar el perfil o historial automatico en este momento. "
+                f"Puedes continuar diligenciando el formulario. Detalle: {error}"
+            )
 
     action_cols = st.columns([1, 1.2, 2.4])
     with action_cols[0]:
@@ -438,6 +441,9 @@ def main() -> None:
     with action_cols[2]:
         if st.session_state.get("moto_history_message"):
             st.info(st.session_state["moto_history_message"])
+
+    if history_warning:
+        st.warning(history_warning)
 
     if profile:
         st.caption(
