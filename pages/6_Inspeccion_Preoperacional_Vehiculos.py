@@ -5,6 +5,7 @@ from datetime import date, datetime
 import streamlit as st
 
 from app_shared import (
+    VEHICLE_INSPECTION_HEADERS,
     append_vehicle_inspection_record,
     current_colombia_datetime,
     find_employee_by_cedula,
@@ -19,6 +20,7 @@ from app_shared import (
     render_sidebar,
     upsert_vehicle_profile,
     upload_request_attachment,
+    inspection_record_exists,
 )
 
 
@@ -502,13 +504,6 @@ def main() -> None:
         if st.session_state.get("vehicle_history_message"):
             st.info(st.session_state["vehicle_history_message"])
 
-    if st.session_state.get("vehicle_submit_success"):
-        st.success(st.session_state["vehicle_submit_success"])
-        st.session_state["vehicle_submit_success"] = ""
-    if st.session_state.get("vehicle_submit_warning"):
-        st.warning(st.session_state["vehicle_submit_warning"])
-        st.session_state["vehicle_submit_warning"] = ""
-
     if history_warning:
         st.warning(history_warning)
 
@@ -637,6 +632,13 @@ def main() -> None:
 
         submitted = st.form_submit_button("Guardar inspeccion", type="primary", use_container_width=True)
 
+    if st.session_state.get("vehicle_submit_success"):
+        st.success(st.session_state["vehicle_submit_success"])
+        st.session_state["vehicle_submit_success"] = ""
+    if st.session_state.get("vehicle_submit_warning"):
+        st.warning(st.session_state["vehicle_submit_warning"])
+        st.session_state["vehicle_submit_warning"] = ""
+
     if not submitted:
         return
 
@@ -668,6 +670,20 @@ def main() -> None:
             st.error(f"No se pudieron preparar las hojas de inspeccion: {error}")
             return
 
+    inspection_date_value = fecha_inspeccion.strftime("%d/%m/%Y")
+    if inspection_record_exists(
+        worksheets["records"],
+        VEHICLE_INSPECTION_HEADERS,
+        employee.get("cedula", ""),
+        inspection_date_value,
+        plate_value=placa.strip(),
+        plate_header="Placa_Vehiculo",
+    ):
+        st.error(
+            f"Ya existe una inspeccion registrada para la cedula {employee.get('cedula', '')} en la fecha {inspection_date_value}."
+        )
+        return
+
     inspection_id = generate_inspection_id("VEH", employee.get("cedula", ""), placa)
     timestamp = format_colombia_timestamp()
     cargo_value = cargo_otro.strip() if cargo == "Otros" else cargo
@@ -693,7 +709,7 @@ def main() -> None:
     record = {
         "Inspeccion_ID": inspection_id,
         "Fecha_Registro": timestamp,
-        "Fecha_Inspeccion": fecha_inspeccion.strftime("%d/%m/%Y"),
+        "Fecha_Inspeccion": inspection_date_value,
         "Sede": sede,
         "Responsable_Inspeccion": responsable,
         "Responsable_Inspeccion_Otro": responsable_otro.strip(),

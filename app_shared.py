@@ -37,6 +37,7 @@ SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
 MOTO_INSPECTION_PAGE = "pages/5_Inspeccion_Preoperacional_Motos.py"
 VEHICLE_INSPECTION_PAGE = "pages/6_Inspeccion_Preoperacional_Vehiculos.py"
+INSPECTION_ADMIN_PAGE = "pages/7_Gestion_de_Inspecciones.py"
 DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
 GOOGLE_SHEETS_RETRY_ATTEMPTS = 4
@@ -680,6 +681,7 @@ def render_sidebar(active_label: str) -> None:
             st.markdown("### Administracion")
             st.page_link(VIATICOS_PAGE, label="Viaticos", icon="🚗")
             st.page_link(GESTION_SOLICITUDES_PAGE, label="Gestion de solicitudes", icon="📊")
+            st.page_link(INSPECTION_ADMIN_PAGE, label="Gestion de inspecciones", icon="📋")
 
         st.divider()
         st.caption(f"Vista actual: {active_label}")
@@ -1598,6 +1600,48 @@ def get_last_vehicle_inspection_record(worksheet, cedula: str, plate: str = "") 
             continue
         return {header: _sheet_value(record.get(header, "")) for header in VEHICLE_INSPECTION_HEADERS}
     return None
+
+
+def get_inspection_records(worksheet, headers: list[str]) -> pd.DataFrame:
+    records = _run_gspread_call("leer registros de inspeccion", worksheet.get_all_records)
+    if not records:
+        return pd.DataFrame(columns=headers)
+
+    df = pd.DataFrame(records)
+    for header in headers:
+        if header not in df.columns:
+            df[header] = ""
+    return df[headers].copy()
+
+
+def inspection_record_exists(
+    worksheet,
+    headers: list[str],
+    cedula: str,
+    inspection_date: str,
+    plate_value: str = "",
+    plate_header: str = "",
+) -> bool:
+    lookup_value = _clean_digits(cedula)
+    if not lookup_value or not inspection_date:
+        return False
+
+    df = get_inspection_records(worksheet, headers)
+    if df.empty or "Cedula" not in df.columns or "Fecha_Inspeccion" not in df.columns:
+        return False
+
+    mask = (
+        df["Cedula"].astype(str).map(_clean_digits) == lookup_value
+    ) & (
+        df["Fecha_Inspeccion"].astype(str).str.strip() == str(inspection_date).strip()
+    )
+
+    if plate_header and plate_header in df.columns and plate_value.strip():
+        mask = mask & (
+            df[plate_header].astype(str).map(_normalize_text) == _normalize_text(plate_value)
+        )
+
+    return bool(mask.any())
 
 
 def _email_settings() -> dict[str, str]:
