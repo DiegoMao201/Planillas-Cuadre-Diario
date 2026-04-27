@@ -242,7 +242,6 @@ def sync_employee_defaults(employee: dict[str, str] | None) -> None:
         return
 
     st.session_state["vehicle_employee_loaded"] = lookup
-    st.session_state["vehicle_cedula"] = employee.get("cedula", st.session_state.get("vehicle_cedula", ""))
     st.session_state["vehicle_numero_identificacion"] = employee.get("cedula", "")
     st.session_state["vehicle_nombre_conductor"] = employee.get("nombre_completo", "")
     st.session_state["vehicle_numero_documento_conductor"] = employee.get("cedula", "")
