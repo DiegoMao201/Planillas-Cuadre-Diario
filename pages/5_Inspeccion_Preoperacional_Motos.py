@@ -187,6 +187,9 @@ def initialize_form_state() -> None:
         "moto_tratamiento_datos": "Sí",
         "moto_profile_loaded": "",
         "moto_employee_loaded": "",
+        "moto_reset_after_submit": False,
+        "moto_submit_success": "",
+        "moto_submit_warning": "",
     }
     for key, label in CHECK_ITEMS:
         defaults[f"moto_check_{key}"] = "Bueno"
@@ -353,9 +356,17 @@ def clear_daily_answers() -> None:
         st.session_state[f"moto_check_{item_key}"] = "Bueno"
 
 
+def consume_post_submit_reset() -> None:
+    if not st.session_state.get("moto_reset_after_submit"):
+        return
+    clear_daily_answers()
+    st.session_state["moto_reset_after_submit"] = False
+
+
 def main() -> None:
     initialize_access_state()
     initialize_form_state()
+    consume_post_submit_reset()
     inject_shared_css()
     inject_page_css()
     render_sidebar("Inspeccion motos")
@@ -441,6 +452,13 @@ def main() -> None:
     with action_cols[2]:
         if st.session_state.get("moto_history_message"):
             st.info(st.session_state["moto_history_message"])
+
+    if st.session_state.get("moto_submit_success"):
+        st.success(st.session_state["moto_submit_success"])
+        st.session_state["moto_submit_success"] = ""
+    if st.session_state.get("moto_submit_warning"):
+        st.warning(st.session_state["moto_submit_warning"])
+        st.session_state["moto_submit_warning"] = ""
 
     if history_warning:
         st.warning(history_warning)
@@ -589,10 +607,6 @@ def main() -> None:
     if tratamiento_datos != "Sí":
         st.error("Para enviar la inspeccion debe aceptar el tratamiento de datos.")
         return
-    if firma is None:
-        st.error("Debe adjuntar la firma o constancia de quien realizo la inspeccion.")
-        return
-
     if worksheets is None:
         try:
             worksheets = get_moto_inspection_worksheets()
@@ -661,14 +675,15 @@ def main() -> None:
     try:
         upsert_moto_profile(worksheets["profiles"], profile_record)
         append_moto_inspection_record(worksheets["records"], record)
-        st.success(f"Inspeccion {inspection_id} registrada correctamente.")
-        if upload_ok and record.get("Firma_URL"):
-            st.info("La firma o constancia quedó cargada con enlace asociado al registro.")
-        elif not upload_ok:
-            st.warning(
-                "La inspeccion quedó guardada, pero el archivo de firma no se pudo almacenar en Dropbox. Revisa la configuracion de secrets."
+        st.session_state["moto_submit_success"] = f"Inspeccion {inspection_id} registrada correctamente."
+        if firma is not None and upload_ok and record.get("Firma_URL"):
+            st.session_state["moto_submit_warning"] = "La firma o constancia quedó cargada con enlace asociado al registro."
+        elif firma is not None and not upload_ok:
+            st.session_state["moto_submit_warning"] = (
+                "La inspeccion quedó guardada, pero el archivo de firma no se pudo almacenar en Dropbox."
             )
-        clear_daily_answers()
+        st.session_state["moto_reset_after_submit"] = True
+        st.rerun()
     except Exception as error:
         st.error(f"No se pudo guardar la inspeccion: {error}")
 

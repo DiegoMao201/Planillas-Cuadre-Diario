@@ -211,6 +211,9 @@ def initialize_form_state() -> None:
         "vehicle_profile_loaded": "",
         "vehicle_employee_loaded": "",
         "vehicle_history_message": "",
+        "vehicle_reset_after_submit": False,
+        "vehicle_submit_success": "",
+        "vehicle_submit_warning": "",
     }
     for item_key, _ in VEHICLE_CHECK_ITEMS:
         defaults[f"vehicle_check_{item_key}"] = "Bueno"
@@ -408,9 +411,17 @@ def clear_daily_answers() -> None:
         st.session_state[f"vehicle_check_{item_key}"] = "Bueno"
 
 
+def consume_post_submit_reset() -> None:
+    if not st.session_state.get("vehicle_reset_after_submit"):
+        return
+    clear_daily_answers()
+    st.session_state["vehicle_reset_after_submit"] = False
+
+
 def main() -> None:
     initialize_access_state()
     initialize_form_state()
+    consume_post_submit_reset()
     inject_shared_css()
     inject_page_css()
     render_sidebar("Inspeccion vehiculos")
@@ -491,6 +502,13 @@ def main() -> None:
     with action_cols[2]:
         if st.session_state.get("vehicle_history_message"):
             st.info(st.session_state["vehicle_history_message"])
+
+    if st.session_state.get("vehicle_submit_success"):
+        st.success(st.session_state["vehicle_submit_success"])
+        st.session_state["vehicle_submit_success"] = ""
+    if st.session_state.get("vehicle_submit_warning"):
+        st.warning(st.session_state["vehicle_submit_warning"])
+        st.session_state["vehicle_submit_warning"] = ""
 
     if history_warning:
         st.warning(history_warning)
@@ -644,10 +662,6 @@ def main() -> None:
     if tratamiento_datos != "Si":
         st.error("Para enviar la inspeccion debe aceptar el tratamiento de datos.")
         return
-    if firma is None:
-        st.error("Debe adjuntar la firma o constancia de quien realizo la inspeccion.")
-        return
-
     if worksheets is None:
         try:
             worksheets = get_vehicle_inspection_worksheets()
@@ -725,12 +739,15 @@ def main() -> None:
     try:
         upsert_vehicle_profile(worksheets["profiles"], profile_record)
         append_vehicle_inspection_record(worksheets["records"], record)
-        st.success(f"Inspeccion {inspection_id} registrada correctamente.")
-        if upload_ok and record.get("Firma_URL"):
-            st.info("La firma o constancia quedó cargada con enlace asociado al registro.")
-        elif not upload_ok:
-            st.warning("La inspeccion quedó guardada, pero el archivo de firma no se pudo almacenar en Dropbox. Revisa la configuracion de secrets.")
-        clear_daily_answers()
+        st.session_state["vehicle_submit_success"] = f"Inspeccion {inspection_id} registrada correctamente."
+        if firma is not None and upload_ok and record.get("Firma_URL"):
+            st.session_state["vehicle_submit_warning"] = "La firma o constancia quedó cargada con enlace asociado al registro."
+        elif firma is not None and not upload_ok:
+            st.session_state["vehicle_submit_warning"] = (
+                "La inspeccion quedó guardada, pero el archivo de firma no se pudo almacenar en Dropbox."
+            )
+        st.session_state["vehicle_reset_after_submit"] = True
+        st.rerun()
     except Exception as error:
         st.error(f"No se pudo guardar la inspeccion: {error}")
 
