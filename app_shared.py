@@ -35,6 +35,7 @@ RECIBOS_PAGE = "pages/1_Recibos_de_Caja.py"
 VIATICOS_PAGE = "pages/2_Viaticos.py"
 SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
+MOTO_INSPECTION_PAGE = "pages/5_Inspeccion_Preoperacional_Motos.py"
 DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
 GOOGLE_SHEETS_RETRY_ATTEMPTS = 4
@@ -152,6 +153,78 @@ AUDIT_HEADERS = [
 
 PARAMETERS_HEADERS = ["Tipo", "Codigo", "Nombre", "Descripcion", "Activo"]
 REPORT_HEADERS = ["Seccion", "Dimension", "Valor", "Cantidad", "Porcentaje"]
+
+MOTO_PROFILE_HEADERS = [
+    "Cedula",
+    "Tipo_Identificacion",
+    "Numero_Identificacion",
+    "Nombre_Conductor",
+    "Numero_Identificacion_Conductor",
+    "Cargo_Conductor",
+    "Sede",
+    "Placa_Motocicleta",
+    "Fecha_Vencimiento_SOAT",
+    "Fecha_Vencimiento_Tecnomecanica",
+    "Ultima_Actualizacion",
+]
+
+MOTO_INSPECTION_HEADERS = [
+    "Inspeccion_ID",
+    "Fecha_Registro",
+    "Fecha_Inspeccion",
+    "Sede",
+    "Responsable_Inspeccion",
+    "Responsable_Inspeccion_Otro",
+    "Tipo_Identificacion",
+    "Numero_Identificacion",
+    "Cedula",
+    "Numero_Empleado",
+    "Nombre_Conductor",
+    "Numero_Identificacion_Conductor",
+    "Cargo_Conductor",
+    "Correo_Conductor",
+    "Telefono_Conductor",
+    "Placa_Motocicleta",
+    "Medicamentos_Somnolencia",
+    "Descanso_Minimo_6_Horas",
+    "Alcohol_O_Sustancias",
+    "Licencia_Vigente",
+    "Fecha_Vencimiento_SOAT",
+    "Porta_SOAT_Vigente",
+    "Certificado_Tecnomecanica",
+    "Fecha_Vencimiento_Tecnomecanica",
+    "Tarjeta_Propiedad",
+    "Herramientas",
+    "Kilometraje_Actual",
+    "Estado_Presencia_Fugas",
+    "Estado_Nivel_Liquido_Frenos",
+    "Estado_Nivel_Aceite_Combustible",
+    "Estado_Suspension_Delantera",
+    "Estado_Suspension_Trasera",
+    "Estado_Freno_Delantero",
+    "Estado_Freno_Trasero",
+    "Estado_Presion_Aire_Llantas",
+    "Estado_Llantas",
+    "Estado_Profundidad_Labrado",
+    "Estado_Luces_Direccionales_Delanteras",
+    "Estado_Luces_Direccionales_Traseras",
+    "Estado_Luces_Delanteras",
+    "Estado_Luces_Traseras",
+    "Estado_Pito",
+    "Estado_Protector_Cadena",
+    "Estado_Tablero",
+    "Estado_Espejos",
+    "Estado_Sistema_Carga",
+    "Estado_Gato_Central_Lateral",
+    "Estado_Casco",
+    "Fallas_Plan_Accion",
+    "Firma_Nombre",
+    "Firma_URL",
+    "Firma_Storage",
+    "Firma_Estado",
+    "Tratamiento_Datos",
+    "Fuente_Registro",
+]
 
 DEFAULT_PARAMETER_ROWS = [
     ["ESTADO", "PENDIENTE", "Pendiente", "Solicitud creada por el empleado", "SI"],
@@ -503,6 +576,7 @@ def render_sidebar(active_label: str) -> None:
             st.image(str(LOGO_PATH), width=170)
         st.markdown("### Accesos")
         st.page_link(SOLICITUD_PAGE, label="Solicitud de permisos", icon="📝")
+        st.page_link(MOTO_INSPECTION_PAGE, label="Inspeccion motos", icon="🏍️")
 
         if has_access("store"):
             st.markdown("### Mi tienda")
@@ -770,15 +844,11 @@ def _get_sheet_previews(spreadsheet, sheet_titles: list[str]) -> dict[str, list[
     return previews
 
 
-def _ensure_sheet_bootstrap(worksheets: dict[str, object], previews: dict[str, list[list[str]]]) -> None:
-    sheet_specs = {
-        "Solicitudes_Registros": REQUEST_HEADERS,
-        "Solicitudes_Novedades": NOVEDADES_HEADERS,
-        "Solicitudes_Auditoria": AUDIT_HEADERS,
-        "Solicitudes_Parametros": PARAMETERS_HEADERS,
-        "Solicitudes_Reporte_Gerencia": REPORT_HEADERS,
-    }
-
+def _ensure_headers_for_sheets(
+    worksheets: dict[str, object],
+    previews: dict[str, list[list[str]]],
+    sheet_specs: dict[str, list[str]],
+) -> None:
     for title, headers in sheet_specs.items():
         preview_rows = previews.get(title, [])
         current_headers = preview_rows[0] if preview_rows else []
@@ -792,6 +862,20 @@ def _ensure_sheet_bootstrap(worksheets: dict[str, object], previews: dict[str, l
                 "A1",
                 [headers],
             )
+
+
+def _ensure_sheet_bootstrap(worksheets: dict[str, object], previews: dict[str, list[list[str]]]) -> None:
+    _ensure_headers_for_sheets(
+        worksheets,
+        previews,
+        {
+            "Solicitudes_Registros": REQUEST_HEADERS,
+            "Solicitudes_Novedades": NOVEDADES_HEADERS,
+            "Solicitudes_Auditoria": AUDIT_HEADERS,
+            "Solicitudes_Parametros": PARAMETERS_HEADERS,
+            "Solicitudes_Reporte_Gerencia": REPORT_HEADERS,
+        },
+    )
 
     parameter_rows = previews.get("Solicitudes_Parametros", [])
     if not _worksheet_has_content(parameter_rows[1:]):
@@ -852,6 +936,14 @@ def _sheet_value(value: object) -> str:
     if pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def generate_inspection_id(prefix: str, cedula: str, plate: str = "") -> str:
+    plate_suffix = _normalize_text(plate).upper()[:6]
+    id_suffix = _clean_digits(cedula)[-4:] or "0000"
+    timestamp = current_colombia_datetime().strftime("%Y%m%d%H%M%S")
+    suffix = f"-{plate_suffix}" if plate_suffix else ""
+    return f"{prefix}-{timestamp}-{id_suffix}{suffix}"
 
 
 def generate_request_id(cedula: str) -> str:
@@ -1191,6 +1283,117 @@ def refresh_management_report(worksheet, df: pd.DataFrame, force: bool = False) 
     st.session_state["solicitudes_report_synced_at"] = now_ts
     st.session_state["solicitudes_report_needs_sync"] = False
     return True
+
+
+@st.cache_resource(ttl=600)
+def get_moto_inspection_worksheets() -> dict[str, object]:
+    spreadsheet = connect_to_base_spreadsheet()
+    existing_worksheets = _get_existing_worksheets(spreadsheet)
+    profiles_ws = _ensure_worksheet_exists(
+        spreadsheet,
+        existing_worksheets,
+        "InspeccionMotos_Perfiles",
+        MOTO_PROFILE_HEADERS,
+        rows=3000,
+    )
+    registros_ws = _ensure_worksheet_exists(
+        spreadsheet,
+        existing_worksheets,
+        "InspeccionMotos_Registros",
+        MOTO_INSPECTION_HEADERS,
+        rows=8000,
+    )
+
+    _ensure_headers_for_sheets(
+        {
+            "InspeccionMotos_Perfiles": profiles_ws,
+            "InspeccionMotos_Registros": registros_ws,
+        },
+        _get_sheet_previews(
+            spreadsheet,
+            [
+                "InspeccionMotos_Perfiles",
+                "InspeccionMotos_Registros",
+            ],
+        ),
+        {
+            "InspeccionMotos_Perfiles": MOTO_PROFILE_HEADERS,
+            "InspeccionMotos_Registros": MOTO_INSPECTION_HEADERS,
+        },
+    )
+
+    return {
+        "spreadsheet": spreadsheet,
+        "profiles": profiles_ws,
+        "records": registros_ws,
+    }
+
+
+def get_moto_profile_by_cedula(worksheet, cedula: str) -> dict[str, str] | None:
+    lookup_value = _clean_digits(cedula)
+    if not lookup_value:
+        return None
+
+    records = _run_gspread_call("leer perfiles de inspeccion motos", worksheet.get_all_records)
+    if not records:
+        return None
+
+    for record in reversed(records):
+        if _clean_digits(record.get("Cedula", "")) == lookup_value:
+            return {header: _sheet_value(record.get(header, "")) for header in MOTO_PROFILE_HEADERS}
+    return None
+
+
+def upsert_moto_profile(worksheet, profile: dict[str, object]) -> None:
+    lookup_value = _clean_digits(profile.get("Cedula", ""))
+    if not lookup_value:
+        raise ValueError("El perfil de inspeccion requiere una cedula valida.")
+
+    row_values = [_sheet_value(profile.get(header, "")) for header in MOTO_PROFILE_HEADERS]
+    records = _run_gspread_call("leer perfiles de inspeccion motos", worksheet.get_all_records)
+    existing_row = None
+    for index, record in enumerate(records, start=2):
+        if _clean_digits(record.get("Cedula", "")) == lookup_value:
+            existing_row = index
+
+    if existing_row is None:
+        _run_gspread_call("registrar perfil de inspeccion motos", worksheet.append_row, row_values)
+        return
+
+    _run_gspread_call(
+        "actualizar perfil de inspeccion motos",
+        worksheet.update,
+        f"A{existing_row}",
+        [row_values],
+    )
+
+
+def append_moto_inspection_record(worksheet, record: dict[str, object]) -> None:
+    _run_gspread_call(
+        "registrar inspeccion preoperacional de motos",
+        worksheet.append_row,
+        [_sheet_value(record.get(header, "")) for header in MOTO_INSPECTION_HEADERS],
+    )
+
+
+def get_last_moto_inspection_record(worksheet, cedula: str, plate: str = "") -> dict[str, str] | None:
+    lookup_value = _clean_digits(cedula)
+    plate_lookup = _normalize_text(plate)
+    if not lookup_value:
+        return None
+
+    records = _run_gspread_call("leer historial de inspeccion motos", worksheet.get_all_records)
+    if not records:
+        return None
+
+    for record in reversed(records):
+        same_cedula = _clean_digits(record.get("Cedula", "")) == lookup_value
+        if not same_cedula:
+            continue
+        if plate_lookup and _normalize_text(record.get("Placa_Motocicleta", "")) != plate_lookup:
+            continue
+        return {header: _sheet_value(record.get(header, "")) for header in MOTO_INSPECTION_HEADERS}
+    return None
 
 
 def _email_settings() -> dict[str, str]:
