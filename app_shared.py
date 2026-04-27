@@ -36,6 +36,7 @@ VIATICOS_PAGE = "pages/2_Viaticos.py"
 SOLICITUD_PAGE = "pages/3_Solicitudes_de_Permisos.py"
 GESTION_SOLICITUDES_PAGE = "pages/4_Gestion_de_Solicitudes.py"
 MOTO_INSPECTION_PAGE = "pages/5_Inspeccion_Preoperacional_Motos.py"
+VEHICLE_INSPECTION_PAGE = "pages/6_Inspeccion_Preoperacional_Vehiculos.py"
 DEFAULT_APPROVAL_URL = "https://planillas-cuadre-diario-contabilidad.streamlit.app/Solicitudes_de_Permisos"
 COLOMBIA_TZ = ZoneInfo("America/Bogota")
 GOOGLE_SHEETS_RETRY_ATTEMPTS = 4
@@ -217,6 +218,97 @@ MOTO_INSPECTION_HEADERS = [
     "Estado_Sistema_Carga",
     "Estado_Gato_Central_Lateral",
     "Estado_Casco",
+    "Fallas_Plan_Accion",
+    "Firma_Nombre",
+    "Firma_URL",
+    "Firma_Storage",
+    "Firma_Estado",
+    "Tratamiento_Datos",
+    "Fuente_Registro",
+]
+
+VEHICLE_PROFILE_HEADERS = [
+    "Cedula",
+    "Tipo_Identificacion",
+    "Numero_Identificacion",
+    "Nombre_Conductor",
+    "Numero_Documento_Conductor",
+    "Cargo_Conductor",
+    "Sede",
+    "Placa_Vehiculo",
+    "Fecha_Vencimiento_SOAT",
+    "Fecha_Vencimiento_Tecnomecanica",
+    "Fecha_Vencimiento_Extintor",
+    "Fecha_Ultimo_Cambio_Aceite",
+    "Fecha_Ultimo_Mantenimiento_Preventivo",
+    "Ultima_Actualizacion",
+]
+
+VEHICLE_INSPECTION_HEADERS = [
+    "Inspeccion_ID",
+    "Fecha_Registro",
+    "Fecha_Inspeccion",
+    "Sede",
+    "Responsable_Inspeccion",
+    "Responsable_Inspeccion_Otro",
+    "Tipo_Identificacion",
+    "Numero_Identificacion",
+    "Cedula",
+    "Numero_Empleado",
+    "Nombre_Conductor",
+    "Numero_Documento_Conductor",
+    "Cargo_Conductor",
+    "Correo_Conductor",
+    "Telefono_Conductor",
+    "Placa_Vehiculo",
+    "Estado_Placa_Visible",
+    "Estado_Placa_Pintura",
+    "Estado_Placa_Legible",
+    "Licencia_Vigente",
+    "Medicamentos_Somnolencia",
+    "Descanso_Minimo_6_Horas",
+    "Alcohol_O_Sustancias",
+    "Tarjeta_Propiedad",
+    "SOAT_Vigente",
+    "Fecha_Vencimiento_SOAT",
+    "Certificado_Tecnomecanica",
+    "Fecha_Vencimiento_Tecnomecanica",
+    "Extintor_Vigente",
+    "Fecha_Vencimiento_Extintor",
+    "Kilometraje_Actual",
+    "Fecha_Ultimo_Cambio_Aceite",
+    "Fecha_Ultimo_Mantenimiento_Preventivo",
+    "Estado_Cabina_Cojineria_Cerradura",
+    "Estado_Plumillas_Manijas_Vidrios_Espejos",
+    "Estado_Carroceria_Estructura",
+    "Estado_Cinturones",
+    "Estado_Fugas_Aceite_Motor",
+    "Estado_Nivel_Aceite_Hidraulico_Motor",
+    "Estado_Nivel_Agua",
+    "Estado_Liquido_Frenos_Presion",
+    "Estado_Freno_Parqueo",
+    "Estado_Fugas_Transmision",
+    "Estado_Llantas",
+    "Estado_Luces_Reversa",
+    "Estado_Esparragos_Tuercas_Pernos",
+    "Estado_Inflado_Llantas",
+    "Estado_Llanta_Repuesto",
+    "Estado_Bateria",
+    "Estado_Rines",
+    "Estado_Profundidad_Labrado",
+    "Estado_Bornes_Terminales_Cables_Bateria",
+    "Estado_Luces_Direccionales",
+    "Estado_Luces_Delanteras",
+    "Estado_Luces_Traseras",
+    "Estado_Luces_Reserva",
+    "Estado_Tablero",
+    "Estado_Pito_Bocina",
+    "Estado_Kit_Carreteras",
+    "Estado_Caja_Herramientas",
+    "Estado_Extintor",
+    "Estado_Botiquin",
+    "Estado_Linterna",
+    "Estado_Kit_Quimicos",
     "Fallas_Plan_Accion",
     "Firma_Nombre",
     "Firma_URL",
@@ -577,6 +669,7 @@ def render_sidebar(active_label: str) -> None:
         st.markdown("### Accesos")
         st.page_link(SOLICITUD_PAGE, label="Solicitud de permisos", icon="📝")
         st.page_link(MOTO_INSPECTION_PAGE, label="Inspeccion motos", icon="🏍️")
+        st.page_link(VEHICLE_INSPECTION_PAGE, label="Inspeccion vehiculos", icon="🚙")
 
         if has_access("store"):
             st.markdown("### Mi tienda")
@@ -1393,6 +1486,117 @@ def get_last_moto_inspection_record(worksheet, cedula: str, plate: str = "") -> 
         if plate_lookup and _normalize_text(record.get("Placa_Motocicleta", "")) != plate_lookup:
             continue
         return {header: _sheet_value(record.get(header, "")) for header in MOTO_INSPECTION_HEADERS}
+    return None
+
+
+@st.cache_resource(ttl=600)
+def get_vehicle_inspection_worksheets() -> dict[str, object]:
+    spreadsheet = connect_to_base_spreadsheet()
+    existing_worksheets = _get_existing_worksheets(spreadsheet)
+    profiles_ws = _ensure_worksheet_exists(
+        spreadsheet,
+        existing_worksheets,
+        "InspeccionVehiculos_Perfiles",
+        VEHICLE_PROFILE_HEADERS,
+        rows=3000,
+    )
+    registros_ws = _ensure_worksheet_exists(
+        spreadsheet,
+        existing_worksheets,
+        "InspeccionVehiculos_Registros",
+        VEHICLE_INSPECTION_HEADERS,
+        rows=8000,
+    )
+
+    _ensure_headers_for_sheets(
+        {
+            "InspeccionVehiculos_Perfiles": profiles_ws,
+            "InspeccionVehiculos_Registros": registros_ws,
+        },
+        _get_sheet_previews(
+            spreadsheet,
+            [
+                "InspeccionVehiculos_Perfiles",
+                "InspeccionVehiculos_Registros",
+            ],
+        ),
+        {
+            "InspeccionVehiculos_Perfiles": VEHICLE_PROFILE_HEADERS,
+            "InspeccionVehiculos_Registros": VEHICLE_INSPECTION_HEADERS,
+        },
+    )
+
+    return {
+        "spreadsheet": spreadsheet,
+        "profiles": profiles_ws,
+        "records": registros_ws,
+    }
+
+
+def get_vehicle_profile_by_cedula(worksheet, cedula: str) -> dict[str, str] | None:
+    lookup_value = _clean_digits(cedula)
+    if not lookup_value:
+        return None
+
+    records = _run_gspread_call("leer perfiles de inspeccion vehiculos", worksheet.get_all_records)
+    if not records:
+        return None
+
+    for record in reversed(records):
+        if _clean_digits(record.get("Cedula", "")) == lookup_value:
+            return {header: _sheet_value(record.get(header, "")) for header in VEHICLE_PROFILE_HEADERS}
+    return None
+
+
+def upsert_vehicle_profile(worksheet, profile: dict[str, object]) -> None:
+    lookup_value = _clean_digits(profile.get("Cedula", ""))
+    if not lookup_value:
+        raise ValueError("El perfil de inspeccion requiere una cedula valida.")
+
+    row_values = [_sheet_value(profile.get(header, "")) for header in VEHICLE_PROFILE_HEADERS]
+    records = _run_gspread_call("leer perfiles de inspeccion vehiculos", worksheet.get_all_records)
+    existing_row = None
+    for index, record in enumerate(records, start=2):
+        if _clean_digits(record.get("Cedula", "")) == lookup_value:
+            existing_row = index
+
+    if existing_row is None:
+        _run_gspread_call("registrar perfil de inspeccion vehiculos", worksheet.append_row, row_values)
+        return
+
+    _run_gspread_call(
+        "actualizar perfil de inspeccion vehiculos",
+        worksheet.update,
+        f"A{existing_row}",
+        [row_values],
+    )
+
+
+def append_vehicle_inspection_record(worksheet, record: dict[str, object]) -> None:
+    _run_gspread_call(
+        "registrar inspeccion preoperacional de vehiculos",
+        worksheet.append_row,
+        [_sheet_value(record.get(header, "")) for header in VEHICLE_INSPECTION_HEADERS],
+    )
+
+
+def get_last_vehicle_inspection_record(worksheet, cedula: str, plate: str = "") -> dict[str, str] | None:
+    lookup_value = _clean_digits(cedula)
+    plate_lookup = _normalize_text(plate)
+    if not lookup_value:
+        return None
+
+    records = _run_gspread_call("leer historial de inspeccion vehiculos", worksheet.get_all_records)
+    if not records:
+        return None
+
+    for record in reversed(records):
+        same_cedula = _clean_digits(record.get("Cedula", "")) == lookup_value
+        if not same_cedula:
+            continue
+        if plate_lookup and _normalize_text(record.get("Placa_Vehiculo", "")) != plate_lookup:
+            continue
+        return {header: _sheet_value(record.get(header, "")) for header in VEHICLE_INSPECTION_HEADERS}
     return None
 
 
